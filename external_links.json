@@ -1,0 +1,18 @@
+[
+    {
+        "Name": "Wiki",
+        "Url": "https://wiki.guildwars2.com/wiki/?search=@@chat@@"
+    },
+    {
+        "Name": "GW2BLTC",
+        "Url": "https://www.gw2bltc.com/en/item/@@itemid@@"
+    },
+    {
+        "Name": "GW2TP",
+        "Url": "https://www.gw2tp.com/item/@@itemid@@"
+    },
+    {
+        "Name": "GW2Efficiency Calculator",
+        "Url": "https://gw2efficiency.com/crafting/calculator/a~0!b~1!c~0!d~1-@@itemid@@"
+    }
+]
