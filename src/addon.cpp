@@ -300,13 +300,13 @@ static AddonDefinition_t AddonDef =
     .APIVersion  = NEXUS_API_VERSION,
     .Name        = "Item Search",
     .Version     = { 0, 1, 0, 0 },
-    .Author      = "Pentose",
+    .Author      = "Todd0042",
     .Description = "Searches for items across your account",
     .Load        = LoadCallback,
     .Unload      = UnloadCallback,
     .Flags       = AF_None,
     .Provider    = UP_GitHub,
-    .UpdateLink  = "https://github.com/tentose/Gw2ItemSearch"
+    .UpdateLink  = "https://github.com/Todd0042/item-search-nexus"
 };
 
 extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef()
