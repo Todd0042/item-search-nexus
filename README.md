@@ -18,7 +18,7 @@ Originally created by [Pentose](https://github.com/tentose) as a Blish HUD modul
 ## Requirements
 
 - Nedus addon loader
-- A [GW2 API key](https://account.arena.net/applications) with at least: `account`, `inventories`, `characters`, `tradingpost`, `unlocks`
+- A GW2 Api Key with at least: `account`, `inventories`, `characters`, `tradingpost`, `unlocks`
 
 ## Installation
 
