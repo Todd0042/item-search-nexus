@@ -42,7 +42,13 @@ ninja -C build
 
 Output: `build/Gw2ItemSearch.dll`
 
+## License
+
+MIT License — see [LICENSE](LICENSE).
+
+This project is a port of the [Gw2ItemSearch](https://github.com/tentose/Gw2ItemSearch) Blish HUD module by [Pentose](https://github.com/tentose) (tentose), used under the MIT License.
+
 ## Credits
 
-- [Pentose](https://github.com/tentose) — original Blish HUD module
+- [Pentose](https://github.com/tentose) — original [Gw2ItemSearch](https://github.com/tentose/Gw2ItemSearch) Blish HUD module (MIT)
 - [TaimiHUD](https://github.com/agaertner/TaimiHUD) — reference Nexus addon implementation

@@ -202,6 +202,9 @@ void MainWindow::Render()
             ImGui::TextUnformatted("No API key set. Open Settings (F12) and enter your GW2 API key.");
         }
 
+        ImGui::Separator();
+        ImGui::TextDisabled("Gw2ItemSearch \xc2\xa9 tentose (MIT) \xe2\x80\x94 ported to Nexus by Todd0042");
+
         ImGui::End();
         return;
     }
@@ -844,9 +847,16 @@ void MainWindow::RenderSettingsWindow()
 
         if (ImGui::BeginTabItem("About"))
         {
-            ImGui::Text("Gw2ItemSearch v0.1.0");
-            ImGui::Text("Originally by Pentose");
-            ImGui::Text("Ported to Nexus addon");
+            ImGui::Text("Gw2ItemSearch v0.7.0");
+            ImGui::Separator();
+            ImGui::Text("Originally by Pentose (tentose)");
+            if (ImGui::SmallButton("github.com/tentose/Gw2ItemSearch"))
+                ShellExecuteA(nullptr, "open", "https://github.com/tentose/Gw2ItemSearch", nullptr, nullptr, SW_SHOWNORMAL);
+            ImGui::Text("Ported to Nexus addon by Todd0042");
+            if (ImGui::SmallButton("github.com/Todd0042/item-search-nexus"))
+                ShellExecuteA(nullptr, "open", "https://github.com/Todd0042/item-search-nexus", nullptr, nullptr, SW_SHOWNORMAL);
+            ImGui::Separator();
+            ImGui::Text("Licensed under MIT.");
             ImGui::Separator();
             ImGui::Text("Searches for items across your account.");
             ImGui::Text("Finds items in bank, shared inventory,");

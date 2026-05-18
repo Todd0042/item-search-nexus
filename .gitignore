@@ -1,9 +1,36 @@
-build/CMakeFiles/
-*.dll.a
-.cmake/
+# Build directory (artifacts, not tracked)
+build/
+
+# CMake generated files
+CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
+CMakeUserPresets.json
+CTestTestfile.cmake
+
+# Ninja build tool
 .ninja_deps
 .ninja_log
 build.ninja
+
+# MinGW artifacts
+*.dll.a
+*.exp
+*.lib
+*.def
+
+# IDE / editor artifacts
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Reference addons (not part of this project)
 reference/
+
+# MOSS check files
+MOSS-Instructions.txt
