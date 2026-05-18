@@ -296,7 +296,7 @@ static void UnloadCallback()
 
 static AddonDefinition_t AddonDef =
 {
-    .Signature   = 0xFFFFFFFF,
+    .Signature   = 0x8DD1EE00,
     .APIVersion  = NEXUS_API_VERSION,
     .Name        = "Item Search",
     .Version     = { 0, 1, 0, 0 },
