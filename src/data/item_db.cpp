@@ -482,8 +482,8 @@ void ItemDb::BatchEnsureItems(const std::vector<int>& ids)
 
 std::vector<int> ItemDb::SearchByName(const std::string& query)
 {
-    // On-demand mode: no local database, search via API
-    if (m_fetchMode == FetchMode::OnDemand && m_items.empty())
+    // On-demand mode: search via API regardless of cached items
+    if (m_fetchMode == FetchMode::OnDemand)
     {
         LogInfo(("SearchByName (on-demand): '" + query + "'").c_str());
 

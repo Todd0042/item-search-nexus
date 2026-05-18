@@ -266,14 +266,6 @@ void MainWindow::Render()
         ImGui::Separator();
     }
 
-    // Auto-reload when first ready
-    if (ready && !m_wasReady)
-    {
-        if (!m_searchQuery.empty() && m_searchQuery.size() >= 3)
-            PerformSearch(m_searchQuery);
-        else if (m_options.HasActiveFilter())
-            PerformBrowse();
-    }
     m_wasReady = ready;
 
     RenderSearchBar();
@@ -293,13 +285,33 @@ void MainWindow::RenderSearchBar()
     static char searchBuf[256] = { 0 };
     strncpy(searchBuf, m_searchQuery.c_str(), sizeof(searchBuf) - 1);
 
-    float btnWidth = ImGui::CalcTextSize("Filters").x + ImGui::CalcTextSize("Settings").x + ImGui::GetStyle().ItemSpacing.x * 4 + ImGui::GetStyle().FramePadding.x * 4;
-    ImGui::PushItemWidth(-btnWidth);
-    if (ImGui::InputTextWithHint("##search", "Search items or use Filters to browse", searchBuf, sizeof(searchBuf)))
-    {
+    float searchBtnWidth = ImGui::CalcTextSize("Search").x + ImGui::GetStyle().FramePadding.x * 2;
+    float filtersBtnWidth = ImGui::CalcTextSize("Filters").x + ImGui::GetStyle().FramePadding.x * 2;
+    float settingsBtnWidth = ImGui::CalcTextSize("Settings").x + ImGui::GetStyle().FramePadding.x * 2;
+    float totalBtnWidth = searchBtnWidth + filtersBtnWidth + settingsBtnWidth + ImGui::GetStyle().ItemSpacing.x * 4;
+
+    ImGui::PushItemWidth(-totalBtnWidth);
+    bool enterPressed = ImGui::InputTextWithHint("##search", "Search items or use Filters to browse", searchBuf, sizeof(searchBuf), ImGuiInputTextFlags_EnterReturnsTrue);
+    if (ImGui::IsItemActivated())
         m_showFilters = false;
-    }
     ImGui::PopItemWidth();
+
+    m_searchQuery = searchBuf;
+
+    bool canSearch = m_searchQuery.size() >= 3 || m_options.HasActiveFilter();
+
+    ImGui::SameLine();
+    bool searchClicked = false;
+    if (!canSearch)
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+        ImGui::Button("Search");
+        ImGui::PopStyleVar();
+    }
+    else
+    {
+        searchClicked = ImGui::Button("Search") || enterPressed;
+    }
 
     ImGui::SameLine();
     if (ImGui::Button("Filters"))
@@ -318,31 +330,13 @@ void MainWindow::RenderSearchBar()
         RenderFilterPanel();
     }
 
-    std::string prevQuery = m_prevSearchQuery;
-    m_searchQuery = searchBuf;
-
-    bool queryChanged = m_searchQuery != prevQuery;
-    bool filtersChanged = m_options != m_lastSearchOptions;
-
-    if (queryChanged)
+    if (searchClicked)
     {
         if (m_searchQuery.size() >= 3)
             PerformSearch(m_searchQuery);
         else if (m_options.HasActiveFilter())
             PerformBrowse();
-        else
-            m_results.clear();
     }
-    else if (filtersChanged)
-    {
-        if (m_searchQuery.size() >= 3)
-            PerformSearch(m_searchQuery);
-        else
-            PerformBrowse();
-    }
-
-    m_prevSearchQuery = m_searchQuery;
-    m_lastSearchOptions = m_options;
 }
 
 void MainWindow::RenderFilterPanel()
