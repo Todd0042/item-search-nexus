@@ -847,7 +847,7 @@ void MainWindow::RenderSettingsWindow()
 
         if (ImGui::BeginTabItem("About"))
         {
-            ImGui::Text("Gw2ItemSearch v0.7.0");
+            ImGui::Text("Gw2ItemSearch v1.0.0");
             ImGui::Separator();
             ImGui::Text("Originally by Pentose (tentose)");
             if (ImGui::SmallButton("github.com/tentose/Gw2ItemSearch"))
