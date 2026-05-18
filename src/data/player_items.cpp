@@ -685,6 +685,35 @@ void PlayerItems::RefreshFromApi()
     }
     m_totalItemCount = totalCount;
 
+    // In on-demand mode, batch-fetch item details for all inventory items
+    if (ItemDb::Instance().GetFetchMode() == FetchMode::OnDemand)
+    {
+        LogInfo("On-demand mode: batch-fetching item details for inventory items");
+        std::vector<int> allIds;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            for (auto& [id, _] : m_items)
+                allIds.push_back(id);
+        }
+        ItemDb::Instance().BatchEnsureItems(allIds);
+
+        // Re-link ItemInfo pointers now that items are cached
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            for (auto& [id, items] : m_items)
+            {
+                auto* info = ItemDb::Instance().GetItemInfo(id);
+                for (auto& item : items)
+                {
+                    item.ItemInfo = info;
+                    if (info)
+                        item.Name = info->Name;
+                }
+            }
+        }
+        LogInfo("On-demand item details batch-fetch complete");
+    }
+
     m_progress = 1.0f;
     m_ready = true;
 

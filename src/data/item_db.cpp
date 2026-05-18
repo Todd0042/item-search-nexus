@@ -6,7 +6,12 @@
 #include <fstream>
 #include <algorithm>
 #include <cctype>
+#include <thread>
+#include <atomic>
 #include <unordered_set>
+#include <winhttp.h>
+
+#pragma comment(lib, "winhttp.lib")
 
 ItemDb& ItemDb::Instance()
 {
@@ -153,11 +158,62 @@ StaticItemInfo ItemDb::ParseItemJson(const json& item)
     return info;
 }
 
+void ItemDb::SaveToDisk()
+{
+    std::string itemsPath = m_cacheDir + "\\all_items.json";
+    json output = json::object();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& [id, info] : m_items)
+        {
+            json j;
+            j["Name"] = info.Name;
+            j["IconUrl"] = info.IconUrl;
+            j["ChatCode"] = info.ChatCode;
+            j["Rarity"] = static_cast<int>(info.Rarity);
+            j["Type"] = static_cast<int>(info.Type);
+            j["SubType"] = static_cast<int>(info.SubType);
+            j["StatChoiceId"] = info.StaticStatChoiceId;
+            if (!info.StaticStatAttributes.empty())
+            {
+                json attrs = json::object();
+                for (auto& [k, v] : info.StaticStatAttributes)
+                    attrs[k] = v;
+                j["StatAttributes"] = attrs;
+            }
+            output[std::to_string(id)] = j;
+        }
+    }
+
+    std::ofstream file(itemsPath);
+    if (file.is_open())
+        file << output.dump(2);
+}
+
+void ItemDb::SaveStatChoicesToDisk()
+{
+    if (m_cacheDir.empty()) return;
+    std::string path = m_cacheDir + "\\statchoices.json";
+    json arr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& [id, name] : m_statChoices)
+        {
+            json j;
+            j["id"] = id;
+            j["name"] = name;
+            arr.push_back(j);
+        }
+    }
+    std::ofstream file(path);
+    if (file.is_open())
+        file << arr.dump(2);
+}
+
 void ItemDb::UpdateFromApi()
 {
     LogInfo("Updating item database from API");
 
-    // Fetch stat choices first (small call, only ~60 entries)
     FetchStatChoices();
 
     auto& api = Gw2Api::Instance();
@@ -177,9 +233,7 @@ void ItemDb::UpdateFromApi()
         for (int id : allIds)
         {
             if (m_items.find(id) == m_items.end())
-            {
                 idsToFetch.push_back(id);
-            }
         }
     }
 
@@ -220,37 +274,151 @@ void ItemDb::UpdateFromApi()
     }
 
     LogInfo(("Added " + std::to_string(newItems) + " new items to database").c_str());
+    SaveToDisk();
+}
 
-    std::string itemsPath = m_cacheDir + "\\all_items.json";
-    json output = json::object();
+void ItemDb::UpdateFromApiParallel()
+{
+    LogInfo("Updating item database from API (parallel)");
+
+    FetchStatChoices();
+
+    auto& api = Gw2Api::Instance();
+    auto allIds = api.GetAllItemIds();
+
+    if (allIds.empty())
+    {
+        LogWarn("Failed to get item IDs from API");
+        return;
+    }
+
+    std::vector<int> idsToFetch;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        for (auto& [id, info] : m_items)
+        for (int id : allIds)
         {
-            json j;
-            j["Name"] = info.Name;
-            j["IconUrl"] = info.IconUrl;
-            j["ChatCode"] = info.ChatCode;
-            j["Rarity"] = static_cast<int>(info.Rarity);
-            j["Type"] = static_cast<int>(info.Type);
-            j["SubType"] = static_cast<int>(info.SubType);
-            j["StatChoiceId"] = info.StaticStatChoiceId;
-            if (!info.StaticStatAttributes.empty())
-            {
-                json attrs = json::object();
-                for (auto& [k, v] : info.StaticStatAttributes)
-                    attrs[k] = v;
-                j["StatAttributes"] = attrs;
-            }
-            output[std::to_string(id)] = j;
+            if (m_items.find(id) == m_items.end())
+                idsToFetch.push_back(id);
         }
     }
 
-    std::ofstream file(itemsPath);
-    if (file.is_open())
+    LogInfo(("Need to fetch " + std::to_string(idsToFetch.size()) + " new items (parallel)").c_str());
+
+    const int batchSize = 200;
+    size_t totalBatches = (idsToFetch.size() + batchSize - 1) / batchSize;
+    const int numWorkers = 6;
+    std::atomic<int> nextBatch{ 0 };
+    std::atomic<int> totalFetched{ 0 };
+
+    auto workerFn = [&]()
     {
-        file << output.dump(2);
-    }
+        // Each worker gets its own WinHTTP session for true concurrent requests
+        HINTERNET hSession = WinHttpOpen(L"Gw2ItemSearch/1.0.0",
+            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+
+        while (true)
+        {
+            int batchIdx = nextBatch.fetch_add(1);
+            if (batchIdx >= (int)totalBatches) break;
+
+            size_t start = batchIdx * batchSize;
+            size_t end = std::min(start + batchSize, idsToFetch.size());
+            std::vector<int> batch(idsToFetch.begin() + start, idsToFetch.begin() + end);
+
+            // Build URL
+            std::string idsStr;
+            for (size_t i = 0; i < batch.size(); i++)
+            {
+                if (i > 0) idsStr += ",";
+                idsStr += std::to_string(batch[i]);
+            }
+            std::string url = "/v2/items?ids=" + idsStr;
+
+            // Direct WinHTTP call (no HttpClient singleton)
+            std::wstring wurl(128 + url.size(), L'\0');
+            int wlen = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, &wurl[0], (int)wurl.size());
+            wurl.resize(wlen - 1);
+
+            URL_COMPONENTS urlComp = { 0 };
+            urlComp.dwStructSize = sizeof(urlComp);
+            urlComp.lpszHostName = (LPWSTR)L"api.guildwars2.com";
+            urlComp.dwHostNameLength = (DWORD)wcslen(L"api.guildwars2.com");
+            urlComp.lpszUrlPath = &wurl[0];
+            urlComp.dwUrlPathLength = (DWORD)wurl.size();
+
+            wchar_t hostBuf[128];
+            wchar_t pathBuf[4096];
+            urlComp.lpszHostName = hostBuf;
+            urlComp.dwHostNameLength = 128;
+            urlComp.lpszUrlPath = pathBuf;
+            urlComp.dwUrlPathLength = 4096;
+
+            if (!WinHttpCrackUrl(wurl.c_str(), (DWORD)wurl.length(), 0, &urlComp))
+                continue;
+
+            HINTERNET hConnect = WinHttpConnect(hSession, urlComp.lpszHostName, urlComp.nPort, 0);
+            if (!hConnect) continue;
+
+            DWORD flags = WINHTTP_FLAG_REFRESH;
+            if (urlComp.nScheme == INTERNET_SCHEME_HTTPS)
+                flags |= WINHTTP_FLAG_SECURE;
+
+            HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", urlComp.lpszUrlPath, NULL, NULL, NULL, flags);
+            if (!hRequest)
+            {
+                WinHttpCloseHandle(hConnect);
+                continue;
+            }
+
+            if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+            {
+                if (WinHttpReceiveResponse(hRequest, NULL))
+                {
+                    std::string body;
+                    DWORD bytesAvailable = 0;
+                    while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0)
+                    {
+                        std::vector<char> buffer(bytesAvailable);
+                        DWORD bytesRead = 0;
+                        if (WinHttpReadData(hRequest, buffer.data(), bytesAvailable, &bytesRead))
+                            body.append(buffer.data(), bytesRead);
+                    }
+
+                    try
+                    {
+                        json items = json::parse(body);
+                        if (items.is_array())
+                        {
+                            for (auto& item : items)
+                            {
+                                int id = item["id"].get<int>();
+                                StaticItemInfo info = ParseItemJson(item);
+                                std::lock_guard<std::mutex> lock(m_mutex);
+                                m_items[id] = info;
+                                totalFetched++;
+                            }
+                        }
+                    }
+                    catch (...) {}
+                }
+            }
+
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+        }
+
+        WinHttpCloseHandle(hSession);
+    };
+
+    std::vector<std::thread> workers;
+    for (int w = 0; w < numWorkers; w++)
+        workers.emplace_back(workerFn);
+
+    for (auto& w : workers)
+        w.join();
+
+    LogInfo(("Parallel fetch complete: " + std::to_string(totalFetched.load()) + " new items").c_str());
+    SaveToDisk();
 }
 
 StaticItemInfo* ItemDb::GetItemInfo(int id)
@@ -274,8 +442,70 @@ int ItemDb::Count() const
     return (int)m_items.size();
 }
 
-std::vector<int> ItemDb::SearchByName(const std::string& query) const
+void ItemDb::BatchEnsureItems(const std::vector<int>& ids)
 {
+    if (ids.empty()) return;
+
+    std::vector<int> toFetch;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (int id : ids)
+        {
+            if (m_items.find(id) == m_items.end())
+                toFetch.push_back(id);
+        }
+    }
+
+    if (toFetch.empty()) return;
+
+    LogInfo(("BatchEnsureItems: fetching " + std::to_string(toFetch.size()) + " uncached items").c_str());
+
+    const int batchSize = 200;
+    for (size_t i = 0; i < toFetch.size(); i += batchSize)
+    {
+        size_t end = std::min(i + batchSize, toFetch.size());
+        std::vector<int> batch(toFetch.begin() + i, toFetch.begin() + end);
+        json items = Gw2Api::Instance().GetItems(batch);
+        if (items.is_null() || !items.is_array()) continue;
+
+        for (auto& item : items)
+        {
+            int id = item["id"].get<int>();
+            StaticItemInfo info = ParseItemJson(item);
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_items[id] = info;
+        }
+    }
+
+    LogInfo("BatchEnsureItems complete");
+}
+
+std::vector<int> ItemDb::SearchByName(const std::string& query)
+{
+    // On-demand mode: no local database, search via API
+    if (m_fetchMode == FetchMode::OnDemand && m_items.empty())
+    {
+        LogInfo(("SearchByName (on-demand): '" + query + "'").c_str());
+
+        json searchResult = Gw2Api::Instance().SearchItems(query);
+        if (searchResult.is_null() || !searchResult.is_array())
+        {
+            LogWarn("SearchByName on-demand failed");
+            return {};
+        }
+
+        std::vector<int> ids = searchResult.get<std::vector<int>>();
+        LogInfo(("SearchByName on-demand found " + std::to_string(ids.size()) + " matching IDs").c_str());
+
+        if (!ids.empty())
+        {
+            BatchEnsureItems(ids);
+        }
+
+        return ids;
+    }
+
+    // Normal mode: search local database
     std::string lowerQuery = query;
     std::transform(lowerQuery.begin(), lowerQuery.end(), lowerQuery.begin(), ::tolower);
 
@@ -328,30 +558,28 @@ void ItemDb::FetchStatChoices()
         return;
     }
 
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_statChoices.clear();
-    m_statNameToIds.clear();
-    m_uniqueStatChoices.clear();
-    std::unordered_set<std::string> seen;
-    for (auto& choice : choices)
     {
-        int id = choice["id"].get<int>();
-        std::string name = choice["name"].get<std::string>();
-        m_statChoices[id] = name;
-        m_statNameToIds[name].push_back(id);
-        if (seen.insert(name).second)
-            m_uniqueStatChoices.push_back({id, name});
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_statChoices.clear();
+        m_statNameToIds.clear();
+        m_uniqueStatChoices.clear();
+        std::unordered_set<std::string> seen;
+        for (auto& choice : choices)
+        {
+            int id = choice["id"].get<int>();
+            std::string name = choice["name"].get<std::string>();
+            m_statChoices[id] = name;
+            m_statNameToIds[name].push_back(id);
+            if (seen.insert(name).second)
+                m_uniqueStatChoices.push_back({id, name});
+        }
+        std::sort(m_uniqueStatChoices.begin(), m_uniqueStatChoices.end(),
+            [](auto& a, auto& b) { return a.second < b.second; });
+
+        LogInfo(("Fetched " + std::to_string(m_statChoices.size()) + " stat choices (" + std::to_string(m_uniqueStatChoices.size()) + " unique) from API").c_str());
     }
-    std::sort(m_uniqueStatChoices.begin(), m_uniqueStatChoices.end(),
-        [](auto& a, auto& b) { return a.second < b.second; });
 
-    LogInfo(("Fetched " + std::to_string(m_statChoices.size()) + " stat choices (" + std::to_string(m_uniqueStatChoices.size()) + " unique) from API").c_str());
-
-    // Save to disk
-    std::string path = m_cacheDir + "\\statchoices.json";
-    std::ofstream file(path);
-    if (file.is_open())
-        file << choices.dump(2);
+    SaveStatChoicesToDisk();
 }
 
 const char* ItemDb::GetStatChoiceName(int id) const

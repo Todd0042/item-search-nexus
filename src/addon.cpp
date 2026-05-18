@@ -113,6 +113,35 @@ void LoadSettingsOptions(bool& hideLegendaryArmory, bool& hideEquippedBags, bool
     catch (...) {}
 }
 
+void SaveFetchMode(FetchMode mode)
+{
+    std::string path = GetSettingsPath();
+    json j;
+    std::ifstream in(path);
+    if (in.is_open())
+    {
+        try { j = json::parse(in); }
+        catch (...) { j = json::object(); }
+    }
+    j["fetch_mode"] = static_cast<int>(mode);
+    std::ofstream file(path);
+    if (file.is_open())
+        file << j.dump(2);
+}
+
+FetchMode LoadFetchMode()
+{
+    std::string path = GetSettingsPath();
+    std::ifstream file(path);
+    if (!file.is_open()) return FetchMode::CreateDBSequential;
+    try
+    {
+        json j = json::parse(file);
+        return static_cast<FetchMode>(j.value("fetch_mode", static_cast<int>(FetchMode::CreateDBSequential)));
+    }
+    catch (...) { return FetchMode::CreateDBSequential; }
+}
+
 static void OnOptionsRender()
 {
     if (ImGui::CollapsingHeader("Item Search", ImGuiTreeNodeFlags_DefaultOpen))
@@ -126,6 +155,22 @@ static void OnOptionsRender()
         }
         ImGui::PopItemWidth();
 
+        ImGui::TextUnformatted("Item data mode:");
+        FetchMode currentMode = LoadFetchMode();
+        int modeIdx = static_cast<int>(currentMode);
+        const char* modeItems = "Create Database (Sequential)\0Create Database (Parallel)\0On Demand\0";
+        ImGui::PushItemWidth(300);
+        if (ImGui::Combo("##fetch_mode_options", &modeIdx, modeItems))
+        {
+            SaveFetchMode(static_cast<FetchMode>(modeIdx));
+            ItemDb::Instance().SetFetchMode(static_cast<FetchMode>(modeIdx));
+        }
+        ImGui::PopItemWidth();
+        if (modeIdx == 2)
+        {
+            ImGui::TextColored(ImVec4(1, 0.6f, 0, 1), "Each search will take ~2 seconds (API request).");
+        }
+
         if (ImGui::Button("Save and Reload"))
         {
             s_apiKey = MainWindow::Instance().GetApiKeyBuffer();
@@ -133,11 +178,19 @@ static void OnOptionsRender()
             {
                 SaveSettingsApiKey(s_apiKey);
                 Gw2Api::Instance().SetApiKey(s_apiKey);
-                std::thread([]()
+                FetchMode fetchMode = LoadFetchMode();
+                ItemDb::Instance().SetFetchMode(fetchMode);
+                std::thread([fetchMode]()
                 {
                     try
                     {
-                        ItemDb::Instance().UpdateFromApi();
+                        if (fetchMode != FetchMode::OnDemand)
+                        {
+                            if (fetchMode == FetchMode::CreateDBParallel)
+                                ItemDb::Instance().UpdateFromApiParallel();
+                            else
+                                ItemDb::Instance().UpdateFromApi();
+                        }
                         PlayerItems::Instance().Initialize(Gw2Api::Instance().GetApiKey(), s_cacheDir);
                     }
                     catch (const std::exception& e)
@@ -259,11 +312,19 @@ static void LoadCallback(AddonAPI_t* aAPI)
     if (!s_apiKey.empty())
     {
         Gw2Api::Instance().SetApiKey(s_apiKey);
-        std::thread([]()
+        FetchMode fetchMode = LoadFetchMode();
+        ItemDb::Instance().SetFetchMode(fetchMode);
+        std::thread([fetchMode]()
         {
             try
             {
-                ItemDb::Instance().UpdateFromApi();
+                if (fetchMode != FetchMode::OnDemand)
+                {
+                    if (fetchMode == FetchMode::CreateDBParallel)
+                        ItemDb::Instance().UpdateFromApiParallel();
+                    else
+                        ItemDb::Instance().UpdateFromApi();
+                }
                 PlayerItems::Instance().Initialize(Gw2Api::Instance().GetApiKey(), s_cacheDir);
             }
             catch (const std::exception& e)

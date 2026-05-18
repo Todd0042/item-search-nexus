@@ -1,5 +1,6 @@
 #pragma once
 #include "data/inventory_item.h"
+#include "addon.h"
 #include <vector>
 #include <string>
 #include <atomic>
@@ -21,6 +22,8 @@ public:
     bool& GetHideLegendaryArmoryRef() { return m_hideLegendaryArmory; }
     bool& GetHideEquippedBagsRef() { return m_hideEquippedBags; }
     bool& GetAutoFocusSearchRef() { return m_autoFocusSearch; }
+    bool IsShowingWizard() const { return m_showSetupWizard; }
+    void ShowWizard() { m_showSetupWizard = true; }
 
 private:
     MainWindow() = default;
@@ -33,6 +36,7 @@ private:
     void PerformSearch(const std::string& query);
     void PerformBrowse();
 
+    void RenderSetupWizard();
     void RenderSettingsWindow();
     void RenderOptionsTab();
     void RenderAboutTab();
@@ -65,6 +69,10 @@ private:
     bool m_hideEquippedBags = false;
     bool m_autoFocusSearch = false;
     int m_selectedSettingsTab = 0;
+
+    // Setup wizard
+    bool m_showSetupWizard = false;
+    int m_wizardFetchMode = 0;
 
     // External links context menu
     int m_contextMenuItemId = 0;

@@ -1,11 +1,13 @@
 #pragma once
 #include "inventory_item.h"
+#include "addon.h"
 #include <nlohmann/json.hpp>
 #include <unordered_map>
 #include <string>
 #include <vector>
 #include <functional>
 #include <mutex>
+#include <atomic>
 
 using json = nlohmann::json;
 
@@ -16,13 +18,19 @@ public:
 
     void Initialize(const std::string& cacheDir);
     void UpdateFromApi();
+    void UpdateFromApiParallel();
+
+    void SetFetchMode(FetchMode mode) { m_fetchMode = mode; }
+    FetchMode GetFetchMode() const { return m_fetchMode; }
 
     StaticItemInfo* GetItemInfo(int id);
     bool HasItem(int id) const;
     int Count() const;
 
-    std::vector<int> SearchByName(const std::string& query) const;
+    std::vector<int> SearchByName(const std::string& query);
     std::vector<int> Browse(const SearchOptions& options) const;
+
+    void BatchEnsureItems(const std::vector<int>& ids);
 
     const std::vector<ExternalLink>& GetExternalLinks() const { return m_externalLinks; }
     void LoadExternalLinks(const std::string& path);
@@ -44,6 +52,8 @@ private:
 
     StaticItemInfo ParseItemJson(const json& item);
     static ItemSubType ParseItemSubType(ItemType type, const std::string& detailType);
+    void SaveToDisk();
+    void SaveStatChoicesToDisk();
 
     std::unordered_map<int, StaticItemInfo> m_items;
     std::vector<ExternalLink> m_externalLinks;
@@ -53,4 +63,5 @@ private:
     std::string m_cacheDir;
     std::string m_assetDir;
     mutable std::mutex m_mutex;
+    FetchMode m_fetchMode = FetchMode::CreateDBSequential;
 };

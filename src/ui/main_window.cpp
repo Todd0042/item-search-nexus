@@ -28,7 +28,12 @@ MainWindow& MainWindow::Instance()
 
 void MainWindow::Initialize()
 {
-    // Loading is handled by LoadCallback in addon.cpp
+    // Show setup wizard if no API key is configured
+    if (Gw2Api::Instance().GetApiKey().empty())
+    {
+        m_showSetupWizard = true;
+        m_visible = true;
+    }
 }
 
 static const char* RarityToString(ItemRarity r)
@@ -158,6 +163,14 @@ void MainWindow::Render()
         m_firstFrame = false;
     }
 
+    // Show setup wizard on first launch
+    if (m_showSetupWizard)
+    {
+        RenderSetupWizard();
+        if (m_showSetupWizard)
+            return;
+    }
+
     if (!m_visible)
         return;
 
@@ -169,15 +182,23 @@ void MainWindow::Render()
 
     if (!ready && !offline)
     {
-        // Full loading screen — no cached data at all
         int itemCount = ItemDb::Instance().Count();
+        FetchMode fetchMode = ItemDb::Instance().GetFetchMode();
         float progress = playerItems.Progress();
         int totalItems = playerItems.TotalItemCount();
 
         ImGui::TextWrapped("Loading data from Guild Wars 2 API...");
 
         char buf[512];
-        snprintf(buf, sizeof(buf), "Items in database: %d", itemCount);
+
+        if (fetchMode == FetchMode::OnDemand)
+        {
+            snprintf(buf, sizeof(buf), "No item database \xe2\x80\x94 fetching item details on demand");
+        }
+        else
+        {
+            snprintf(buf, sizeof(buf), "Items in database: %s", FormatCount(itemCount).c_str());
+        }
         ImGui::TextUnformatted(buf);
 
         if (totalItems > 0)
@@ -193,9 +214,22 @@ void MainWindow::Render()
 
         if (!Gw2Api::Instance().GetApiKey().empty())
         {
-            ImGui::TextWrapped("This first scan fetches every item from every character's inventory, bank, material storage, and trading post. It can take several minutes (up to 10 for larger accounts).");
-            ImGui::NewLine();
-            ImGui::TextWrapped("Subsequent loads are much faster \xe2\x80\x94 bank, material storage, shared inventory, and trading post are always refreshed, but individual characters are only re-scanned if they've gained playtime since the last scan. Unchanged characters load from disk cache.");
+            if (fetchMode == FetchMode::OnDemand)
+            {
+                ImGui::TextWrapped("Scanning your account for items... (no database being created, item details will be fetched as needed)");
+            }
+            else if (fetchMode == FetchMode::CreateDBParallel)
+            {
+                ImGui::TextWrapped("Creating item database in parallel (~60 seconds). You may notice some in-game lag during this process.");
+                ImGui::NewLine();
+                ImGui::TextWrapped("This first scan fetches every item from every character's inventory, bank, material storage, and trading post. It can take several minutes.");
+            }
+            else
+            {
+                ImGui::TextWrapped("This first scan fetches every item from every character's inventory, bank, material storage, and trading post. It can take several minutes (up to 10 for larger accounts).");
+                ImGui::NewLine();
+                ImGui::TextWrapped("Subsequent loads are much faster \xe2\x80\x94 bank, material storage, shared inventory, and trading post are always refreshed, but individual characters are only re-scanned if they've gained playtime since the last scan. Unchanged characters load from disk cache.");
+            }
         }
         else
         {
@@ -789,61 +823,214 @@ void MainWindow::PerformBrowse()
     m_searching = false;
 }
 
+void MainWindow::RenderSetupWizard()
+{
+    ImGui::SetNextWindowSize(ImVec2(520, 440), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(
+        ImGui::GetIO().DisplaySize.x * 0.5f,
+        ImGui::GetIO().DisplaySize.y * 0.5f
+    ), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+
+    ImGui::Begin("Item Search Setup", nullptr,
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+
+    ImGui::TextWrapped("Welcome to Gw2ItemSearch!");
+    ImGui::Separator();
+    ImGui::TextWrapped("To get started, enter your Guild Wars 2 API key and choose how item data should be loaded.");
+
+    ImGui::NewLine();
+
+    // API key
+    ImGui::TextUnformatted("API Key:");
+    ImGui::InputText("##wizard_api_key", m_apiKeyBuffer, sizeof(m_apiKeyBuffer));
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Create a free API key at https://account.arena.net/applications");
+    ImGui::NewLine();
+
+    // Fetch mode selection
+    ImGui::TextUnformatted("Item data mode:");
+    ImGui::TextDisabled("How should item names, icons, and types be loaded?");
+
+    const char* modeNames[] = {
+        "Create Database (Sequential) \xe2\x80\x94 ~6 minutes, no lag",
+        "Create Database (Parallel) \xe2\x80\x94 ~1 minute, some in-game lag",
+        "On Demand \xe2\x80\x94 No initial wait, each search takes ~2 seconds"
+    };
+    const char* modeDescriptions[] = {
+        "Downloads ALL 70,000+ items from the GW2 API one batch at a time. "
+        "After the first load, subsequent loads are instant from disk cache.",
+        "Downloads the full database using 6 concurrent connections. "
+        "Much faster but may cause stutter while the game is running.",
+        "No full download. Item names are fetched from the API each time you search. "
+        "Your inventory items are cached locally. Best if you don't want a long first load."
+    };
+    const char* modeWarnings[] = {
+        "",
+        "",
+        "Warning: With on-demand mode, every search makes an API request (~1-2 seconds) "
+        "and the stat/dropdown-based 'Browse' feature is unavailable."
+    };
+
+    for (int i = 0; i < 3; i++)
+    {
+        if (ImGui::RadioButton(modeNames[i], &m_wizardFetchMode, i))
+        {
+        }
+        ImGui::TextDisabled("  %s", modeDescriptions[i]);
+        if (i == 2 && m_wizardFetchMode == 2)
+        {
+            ImGui::TextColored(ImVec4(1, 0.6f, 0, 1), "  %s", modeWarnings[i]);
+        }
+        ImGui::NewLine();
+    }
+
+    ImGui::Separator();
+
+    bool hasKey = strlen(m_apiKeyBuffer) > 0;
+    if (!hasKey)
+    {
+        ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "Please enter an API key to continue.");
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+        ImGui::Button("Save and Start", ImVec2(200, 0));
+        ImGui::PopStyleVar();
+    }
+    else if (ImGui::Button("Save and Start", ImVec2(200, 0)))
+    {
+        FetchMode mode = static_cast<FetchMode>(m_wizardFetchMode);
+        SaveFetchMode(mode);
+        SaveSettingsApiKey(m_apiKeyBuffer);
+        Gw2Api::Instance().SetApiKey(m_apiKeyBuffer);
+
+        ItemDb::Instance().SetFetchMode(mode);
+        LogInfo("Starting data load from setup wizard");
+
+        std::string cacheDir = m_cacheDir;
+        std::thread([mode, cacheDir]()
+        {
+            try
+            {
+                if (mode != FetchMode::OnDemand)
+                {
+                    if (mode == FetchMode::CreateDBParallel)
+                        ItemDb::Instance().UpdateFromApiParallel();
+                    else
+                        ItemDb::Instance().UpdateFromApi();
+                }
+                PlayerItems::Instance().Initialize(Gw2Api::Instance().GetApiKey(), cacheDir);
+            }
+            catch (const std::exception& e)
+            {
+                LogWarn(("Data loading failed: " + std::string(e.what())).c_str());
+            }
+            catch (...)
+            {
+                LogWarn("Data loading failed with unknown exception");
+            }
+        }).detach();
+
+        m_showSetupWizard = false;
+        m_visible = true;
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(100, 0)))
+    {
+        m_showSetupWizard = false;
+    }
+
+    ImGui::End();
+}
+
 void MainWindow::RenderSettingsWindow()
 {
     ImGui::Begin("Item Search Settings", &m_showSettings);
 
     if (ImGui::BeginTabBar("SettingsTabs"))
     {
-        if (ImGui::BeginTabItem("Options"))
-        {
-            static bool prevHideLegendaryArmory = m_hideLegendaryArmory;
-            static bool prevHideEquippedBags = m_hideEquippedBags;
-            static bool prevAutoFocusSearch = m_autoFocusSearch;
-
-            ImGui::Checkbox("Hide Legendary Armory", &m_hideLegendaryArmory);
-            ImGui::Checkbox("Hide Equipped Bags", &m_hideEquippedBags);
-            ImGui::Checkbox("Auto-focus search field", &m_autoFocusSearch);
-
-            if (m_hideLegendaryArmory != prevHideLegendaryArmory ||
-                m_hideEquippedBags != prevHideEquippedBags ||
-                m_autoFocusSearch != prevAutoFocusSearch)
+            if (ImGui::BeginTabItem("Options"))
             {
-                SaveSettingsOptions(m_hideLegendaryArmory, m_hideEquippedBags, m_autoFocusSearch);
-                prevHideLegendaryArmory = m_hideLegendaryArmory;
-                prevHideEquippedBags = m_hideEquippedBags;
-                prevAutoFocusSearch = m_autoFocusSearch;
-            }
+                static bool prevHideLegendaryArmory = m_hideLegendaryArmory;
+                static bool prevHideEquippedBags = m_hideEquippedBags;
+                static bool prevAutoFocusSearch = m_autoFocusSearch;
 
-            ImGui::Separator();
-            ImGui::Text("API Key");
-            ImGui::InputText("##api_key_settings", m_apiKeyBuffer, sizeof(m_apiKeyBuffer));
-            if (ImGui::Button("Save API Key"))
-            {
-                std::string key(m_apiKeyBuffer);
-                SaveSettingsApiKey(key);
-                Gw2Api::Instance().SetApiKey(key);
-                std::string cacheDir = m_cacheDir;
-                std::thread([cacheDir]()
+                ImGui::Checkbox("Hide Legendary Armory", &m_hideLegendaryArmory);
+                ImGui::Checkbox("Hide Equipped Bags", &m_hideEquippedBags);
+                ImGui::Checkbox("Auto-focus search field", &m_autoFocusSearch);
+
+                if (m_hideLegendaryArmory != prevHideLegendaryArmory ||
+                    m_hideEquippedBags != prevHideEquippedBags ||
+                    m_autoFocusSearch != prevAutoFocusSearch)
                 {
-                    try
-                    {
-                        ItemDb::Instance().UpdateFromApi();
-                        PlayerItems::Instance().Initialize(Gw2Api::Instance().GetApiKey(), cacheDir);
-                    }
-                    catch (const std::exception& e)
-                    {
-                        LogWarn(("Data loading failed: " + std::string(e.what())).c_str());
-                    }
-                    catch (...)
-                    {
-                        LogWarn("Data loading failed with unknown exception");
-                    }
-                }).detach();
-            }
+                    SaveSettingsOptions(m_hideLegendaryArmory, m_hideEquippedBags, m_autoFocusSearch);
+                    prevHideLegendaryArmory = m_hideLegendaryArmory;
+                    prevHideEquippedBags = m_hideEquippedBags;
+                    prevAutoFocusSearch = m_autoFocusSearch;
+                }
 
-            ImGui::EndTabItem();
-        }
+                ImGui::Separator();
+
+                // Fetch mode selector
+                FetchMode currentMode = ItemDb::Instance().GetFetchMode();
+                int modeIdx = static_cast<int>(currentMode);
+                const char* modeItems = "Create Database (Sequential)\0Create Database (Parallel)\0On Demand\0";
+                ImGui::TextUnformatted("Item data mode:");
+                if (ImGui::Combo("##fetch_mode", &modeIdx, modeItems))
+                {
+                    FetchMode newMode = static_cast<FetchMode>(modeIdx);
+                    SaveFetchMode(newMode);
+                    ItemDb::Instance().SetFetchMode(newMode);
+                }
+                if (ImGui::IsItemHovered())
+                {
+                    if (modeIdx == 0)
+                        ImGui::SetTooltip("Downloads all 70k+ items sequentially. ~6 min first load, no lag, instant searches.");
+                    else if (modeIdx == 1)
+                        ImGui::SetTooltip("Downloads all 70k+ items using 6 parallel connections. ~1 min first load, minor lag.");
+                    else
+                        ImGui::SetTooltip("No database. Item names fetched via API on each search (~2 sec). Choose this to skip the long first load.");
+                }
+
+                if (modeIdx == 2)
+                {
+                    ImGui::TextColored(ImVec4(1, 0.6f, 0, 1), "Each search will take approximately 2 seconds (API request).");
+                }
+
+                ImGui::Separator();
+                ImGui::Text("API Key");
+                ImGui::InputText("##api_key_settings", m_apiKeyBuffer, sizeof(m_apiKeyBuffer));
+                if (ImGui::Button("Save and Reload"))
+                {
+                    std::string key(m_apiKeyBuffer);
+                    SaveSettingsApiKey(key);
+                    Gw2Api::Instance().SetApiKey(key);
+                    FetchMode fetchMode = ItemDb::Instance().GetFetchMode();
+                    std::string cacheDir = m_cacheDir;
+                    std::thread([fetchMode, cacheDir]()
+                    {
+                        try
+                        {
+                            if (fetchMode != FetchMode::OnDemand)
+                            {
+                                if (fetchMode == FetchMode::CreateDBParallel)
+                                    ItemDb::Instance().UpdateFromApiParallel();
+                                else
+                                    ItemDb::Instance().UpdateFromApi();
+                            }
+                            PlayerItems::Instance().Initialize(Gw2Api::Instance().GetApiKey(), cacheDir);
+                        }
+                        catch (const std::exception& e)
+                        {
+                            LogWarn(("Data loading failed: " + std::string(e.what())).c_str());
+                        }
+                        catch (...)
+                        {
+                            LogWarn("Data loading failed with unknown exception");
+                        }
+                    }).detach();
+                }
+
+                ImGui::EndTabItem();
+            }
 
         if (ImGui::BeginTabItem("About"))
         {

@@ -34,6 +34,7 @@ public:
     json GetTradingPostDelivery();
     json GetTradingPostSells();
     json GetLegendaryArmory();
+    json SearchItems(const std::string& text);
     json GetJsonPublic(const std::string& endpoint) { return GetJson(endpoint); }
 
     template<typename T>

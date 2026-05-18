@@ -144,3 +144,8 @@ json Gw2Api::GetLegendaryArmory()
 {
     return GetJsonWithAuth("/v2/account/legendaryarmory");
 }
+
+json Gw2Api::SearchItems(const std::string& text)
+{
+    return GetJson("/v2/search?ids=all&text=" + text);
+}
