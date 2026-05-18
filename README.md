@@ -23,7 +23,7 @@ Originally created by [Pentose](https://github.com/tentose) as a Blish HUD modul
 ## Installation
 
 1. Download `Gw2ItemSearch.dll` from [Releases](https://github.com/Todd0042/item-search-nexus/releases)
-2. Copy it into your Nexus addons folder (typically `%appdata%/Nexus Data/Addons/`)
+2. Copy it into your addons folder (typically `Guild Wars 2/Addons/` inside your Guild Wars 2 installation directory)
 3. Launch the game, open Nexus (default: Alt+Z) → Options → Item Search → enter your API key and click "Save and Reload"
 4. Toggle the search window with the default hotkey Alt+F or click the Nexus QuickAccess icon
 

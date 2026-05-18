@@ -185,7 +185,7 @@ void ItemDb::UpdateFromApi()
 
     LogInfo(("Need to fetch " + std::to_string(idsToFetch.size()) + " new items").c_str());
 
-    const int batchSize = 190;
+    const int batchSize = 200;
     size_t totalBatches = (idsToFetch.size() + batchSize - 1) / batchSize;
     for (size_t i = 0; i < idsToFetch.size(); i += batchSize)
     {
@@ -196,7 +196,7 @@ void ItemDb::UpdateFromApi()
         if (items.is_null() || !items.is_array())
         {
             LogWarn("Failed to fetch item batch");
-            Sleep(200);
+            Sleep(50);
             continue;
         }
 
@@ -216,7 +216,7 @@ void ItemDb::UpdateFromApi()
             LogInfo(("Item DB progress: " + std::to_string(batchNum) + "/" + std::to_string(totalBatches) + " batches (" + std::to_string(newItems) + " items)").c_str());
         }
 
-        Sleep(200);
+        Sleep(50);
     }
 
     LogInfo(("Added " + std::to_string(newItems) + " new items to database").c_str());

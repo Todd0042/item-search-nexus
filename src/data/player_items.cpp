@@ -56,11 +56,28 @@ void PlayerItems::AddItem(std::unordered_map<int, std::vector<InventoryItem>>& i
     if (it == items.end())
     {
         items[id] = { item };
+        return;
     }
-    else
+
+    // Merge with an existing entry that shares the same identity (source, character,
+    // upgrades, infusions, stats, equipment tab). Items with different upgrades/stats
+    // are kept separate since they are meaningfully different (e.g. two of the same
+    // weapon with different sigils).
+    for (auto& existing : it->second)
     {
-        it->second.push_back(item);
+        if (existing.Source == item.Source &&
+            existing.CharacterName == item.CharacterName &&
+            existing.Upgrades == item.Upgrades &&
+            existing.Infusions == item.Infusions &&
+            existing.StatChoiceId == item.StatChoiceId &&
+            existing.EquipmentTabId == item.EquipmentTabId)
+        {
+            existing.Count += item.Count;
+            return;
+        }
     }
+
+    it->second.push_back(item);
 }
 
 void PlayerItems::Initialize(const std::string& apiKey, const std::string& cacheDir)
