@@ -9,6 +9,9 @@ Originally created by [Pentose](https://github.com/tentose) as a Blish HUD modul
 - Search items by name with type/rarity/subtype/stat filters
 - Browse your full inventory using filter-only mode (no search query needed)
 - View item stats, upgrades, infusions, and containment info in tooltips
+- Parallel downloading (12 connections) — full 73k item database in ~30s
+- Parallel character scanning (6 workers) — scans all chars simultaneously
+- Zero in-game lag during background loading
 - Background polling refreshes character gear as you play (no manual reload needed)
 - Offline mode — shows cached data immediately while latest data is fetched
 - Stat choice filter finds items across all rarities (e.g. "Berserker's" matches exotic and ascended)
@@ -24,12 +27,14 @@ Originally created by [Pentose](https://github.com/tentose) as a Blish HUD modul
 
 1. Download `Gw2ItemSearch.dll` from [Releases](https://github.com/Todd0042/item-search-nexus/releases)
 2. Copy it into your addons folder (typically `Guild Wars 2/Addons/` inside your Guild Wars 2 installation directory)
-3. Launch the game, open Nexus (default: Alt+Z) → Options → Item Search → enter your API key and click "Save and Reload"
+3. Launch the game — the setup wizard will appear. Enter your API key and click "Save and Start"
 4. Toggle the search window with the default hotkey Alt+F or click the Nexus QuickAccess icon
 
 ## First-time load
 
-The first scan fetches every item from every character's inventory, bank, material storage, and trading post. This can take several minutes (up to 10 for larger accounts). Subsequent loads are much faster — bank, materials, shared inventory, and trading post are always refreshed, but individual characters are only re-scanned if they've gained playtime since the last scan.
+The item database (~73k items) is downloaded using 12 parallel connections, then all characters are scanned in parallel with 6 workers. A full first load takes about **1 minute**. Zero in-game lag.
+
+Subsequent loads are much faster — bank, materials, shared inventory, and trading post are always refreshed, but individual characters are only re-scanned if they've gained playtime since the last scan.
 
 ## Building from source
 
@@ -51,4 +56,5 @@ This project is a port of the [Gw2ItemSearch](https://github.com/tentose/Gw2Item
 ## Credits
 
 - [Pentose](https://github.com/tentose) — original [Gw2ItemSearch](https://github.com/tentose/Gw2ItemSearch) Blish HUD module (MIT)
+- [Blish HUD](https://github.com/blish-hud/Blish-HUD) — standalone overlay for Guild Wars 2
 - [TaimiHUD](https://github.com/agaertner/TaimiHUD) — reference Nexus addon implementation
