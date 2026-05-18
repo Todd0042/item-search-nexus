@@ -258,6 +258,10 @@ static void LoadCallback(AddonAPI_t* aAPI)
     strncpy(MainWindow::Instance().GetApiKeyBuffer(), s_apiKey.c_str(), 255);
     LogInfo((LoadMs() + " [LOAD] API key " + std::string(s_apiKey.empty() ? "not found" : "loaded")).c_str());
 
+    // Set the API key on the API instance before Initialize checks it
+    if (!s_apiKey.empty())
+        Gw2Api::Instance().SetApiKey(s_apiKey);
+
     MainWindow::Instance().Initialize();
 
     LoadSettingsOptions(
@@ -269,7 +273,6 @@ static void LoadCallback(AddonAPI_t* aAPI)
     // If we have an API key, start loading data
     if (!s_apiKey.empty())
     {
-        Gw2Api::Instance().SetApiKey(s_apiKey);
         LogInfo((LoadMs() + " [LOAD] Starting data load thread (parallel)").c_str());
         std::thread([]()
         {
@@ -311,7 +314,7 @@ static AddonDefinition_t AddonDef =
     .Signature   = 0xFFFFFFFF,
     .APIVersion  = NEXUS_API_VERSION,
     .Name        = "Item Search",
-    .Version     = { 1, 1, 0, 0 },
+    .Version     = { 1, 1, 1, 0 },
     .Author      = "Todd0042",
     .Description = "Searches for items across your account",
     .Load        = LoadCallback,

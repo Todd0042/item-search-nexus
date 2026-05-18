@@ -1,0 +1,29 @@
+Gw2ItemSearch - Search for items across your entire Guild Wars 2 account.
+
+Type to search, or use filters to browse. Finds items in bank, shared inventory, material storage, every character's bags/equipment/equipment tabs, and trading post.
+
+[b]Installation:[/b]
+1. Download Gw2ItemSearch.dll from the GitHub releases page
+2. Copy into your Guild Wars 2/Addons/ folder
+3. Launch the game — the setup wizard will appear
+4. Enter your GW2 API key (requires: account, inventories, characters, tradingpost, unlocks)
+5. Toggle the search window with Alt+F or the Nexus QuickAccess icon
+
+[b]Performance:[/b]
+- Item database: ~73k items downloaded in ~30 seconds using 12 parallel connections
+- Character scanning: all characters scanned simultaneously with 6 parallel workers
+- Full first load completes in about 1 minute with zero in-game lag
+- Subsequent loads are instant for unchanged characters (disk cache)
+
+[b]Features:[/b]
+- Search items by name with type, rarity, subtype, and stat filters
+- Browse inventory without a search query (filter-only mode)
+- View stats, upgrades, infusions, and containment info in tooltips
+- Background polling — character gear refreshes automatically as you play
+- Offline mode — shows cached data immediately while latest data is fetched
+- Stat choice filter (e.g. find all "Berserker's" items across every rarity)
+- Icons loaded in background thread (no frame stutter)
+- Right-click items for chat codes, wiki links, gw2efficiency, gw2bltc
+- Settings persist across sessions
+
+This is a port of the Gw2ItemSearch Blish HUD module by tentose (MIT).
