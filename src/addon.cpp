@@ -300,6 +300,8 @@ static void UnloadCallback()
     IconCache::Instance().Shutdown();
     PlayerItems::Instance().Stop();
 
+    APIDefs->Events_Unsubscribe(EV_MUMBLE_IDENTITY_UPDATED, OnMumbleIdentity);
+    APIDefs->Events_Unsubscribe(EV_WINDOW_RESIZED, OnWindowResized);
     APIDefs->GUI_Deregister(OnRender);
     APIDefs->GUI_Deregister(OnOptionsRender);
     APIDefs->InputBinds_Deregister("IS_TOGGLE_BIND");
@@ -314,7 +316,7 @@ static AddonDefinition_t AddonDef =
     .Signature   = 0xFFFFFFFF,
     .APIVersion  = NEXUS_API_VERSION,
     .Name        = "Item Search",
-    .Version     = { 1, 1, 1, 0 },
+    .Version     = { 1, 1, 2, 0 },
     .Author      = "Todd0042",
     .Description = "Searches for items across your account",
     .Load        = LoadCallback,
