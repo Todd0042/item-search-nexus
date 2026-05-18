@@ -13,12 +13,27 @@ HttpClient& HttpClient::Instance()
     return instance;
 }
 
-HttpClient::HttpClient() {}
-HttpClient::~HttpClient() {}
+HttpClient::HttpClient()
+{
+    m_session = WinHttpOpen(L"Gw2ItemSearch/1.0.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    if (!m_session)
+        LogWarn("WinHttpOpen failed");
+}
+HttpClient::~HttpClient()
+{
+    if (m_session)
+        WinHttpCloseHandle(m_session);
+}
 
 HttpResult HttpClient::Get(const std::string& url, const std::string& authorization)
 {
     HttpResult result;
+
+    if (!m_session)
+    {
+        LogWarn("HttpClient: no session handle");
+        return result;
+    }
 
     URL_COMPONENTS urlComp = { 0 };
     urlComp.dwStructSize = sizeof(urlComp);
@@ -33,21 +48,16 @@ HttpResult HttpClient::Get(const std::string& url, const std::string& authorizat
     std::wstring wurl(url.begin(), url.end());
     if (!WinHttpCrackUrl(wurl.c_str(), (DWORD)wurl.length(), 0, &urlComp))
     {
-        LogWarn("WinHttpCrackUrl failed");
+        LogWarn("HttpClient: WinHttpCrackUrl failed");
         return result;
     }
 
-    HINTERNET hSession = WinHttpOpen(L"Gw2ItemSearch/0.1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
-    if (!hSession)
-    {
-        LogWarn("WinHttpOpen failed");
-        return result;
-    }
+    std::lock_guard<std::mutex> lock(m_httpMutex);
 
-    HINTERNET hConnect = WinHttpConnect(hSession, hostName, urlComp.nPort, 0);
+    HINTERNET hConnect = WinHttpConnect(m_session, hostName, urlComp.nPort, 0);
     if (!hConnect)
     {
-        WinHttpCloseHandle(hSession);
+        LogWarn("HttpClient: WinHttpConnect failed");
         return result;
     }
 
@@ -59,7 +69,7 @@ HttpResult HttpClient::Get(const std::string& url, const std::string& authorizat
     if (!hRequest)
     {
         WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+        LogWarn("HttpClient: WinHttpOpenRequest failed");
         return result;
     }
 
@@ -75,7 +85,7 @@ HttpResult HttpClient::Get(const std::string& url, const std::string& authorizat
     {
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+        LogWarn("HttpClient: WinHttpSendRequest failed");
         return result;
     }
 
@@ -83,7 +93,7 @@ HttpResult HttpClient::Get(const std::string& url, const std::string& authorizat
     {
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
+        LogWarn("HttpClient: WinHttpReceiveResponse failed");
         return result;
     }
 
@@ -109,7 +119,6 @@ HttpResult HttpClient::Get(const std::string& url, const std::string& authorizat
 
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
 
     return result;
 }

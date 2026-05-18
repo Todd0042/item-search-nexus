@@ -575,31 +575,26 @@ void PlayerItems::RefreshFromApi()
 
     // Characters with age tracking
     m_progress = 0.35f;
-    auto characters = api.GetCharacters();
+    // Use the paged endpoint that returns names + ages in one call
+    auto characters = api.GetCharactersWithAges();
     if (!characters.is_null() && characters.is_array())
     {
         float charStep = 0.45f / std::max((float)characters.size(), 1.0f);
         int charIdx = 0;
 
-        for (auto& charName : characters)
+        for (auto& entry : characters)
         {
-            std::string name = charName.get<std::string>();
+            std::string name = entry["name"].get<std::string>();
             m_progress = 0.35f + charIdx * charStep;
 
-            int64_t currentAge = 0;
+            int64_t currentAge = entry.value("age", (int64_t)0);
+            auto cacheIt = m_cachedAges.find(name);
             bool needsFetch = true;
 
-            // Check if character age changed via core endpoint
-            auto coreData = api.GetCharacterCore(name);
-            if (!coreData.is_null() && coreData.contains("age"))
+            if (cacheIt != m_cachedAges.end() && cacheIt->second == currentAge)
             {
-                currentAge = coreData["age"].get<int64_t>();
-                auto cacheIt = m_cachedAges.find(name);
-                if (cacheIt != m_cachedAges.end() && cacheIt->second == currentAge)
-                {
-                    needsFetch = false;
-                    LogDebug(("Character " + name + " unchanged (age=" + std::to_string(currentAge) + "), using cache").c_str());
-                }
+                needsFetch = false;
+                LogDebug(("Character " + name + " unchanged (age=" + std::to_string(currentAge) + "), using cache").c_str());
             }
 
             m_charAges[name] = currentAge;

@@ -35,4 +35,6 @@ private:
     std::string m_apiKey;
     std::string m_baseUrl = "https://api.guildwars2.com";
     std::string m_renderBaseUrl = "https://render.guildwars2.com";
+    void* m_session = nullptr;
+    std::mutex m_httpMutex;
 };
