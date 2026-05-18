@@ -52,8 +52,6 @@ HttpResult HttpClient::Get(const std::string& url, const std::string& authorizat
         return result;
     }
 
-    std::lock_guard<std::mutex> lock(m_httpMutex);
-
     HINTERNET hConnect = WinHttpConnect(m_session, hostName, urlComp.nPort, 0);
     if (!hConnect)
     {

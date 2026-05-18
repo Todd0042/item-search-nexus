@@ -10,6 +10,7 @@
 #include <string>
 #include <thread>
 #include <fstream>
+#include <chrono>
 
 AddonAPI_t* APIDefs = nullptr;
 bool IsMapOpen = false;
@@ -113,35 +114,6 @@ void LoadSettingsOptions(bool& hideLegendaryArmory, bool& hideEquippedBags, bool
     catch (...) {}
 }
 
-void SaveFetchMode(FetchMode mode)
-{
-    std::string path = GetSettingsPath();
-    json j;
-    std::ifstream in(path);
-    if (in.is_open())
-    {
-        try { j = json::parse(in); }
-        catch (...) { j = json::object(); }
-    }
-    j["fetch_mode"] = static_cast<int>(mode);
-    std::ofstream file(path);
-    if (file.is_open())
-        file << j.dump(2);
-}
-
-FetchMode LoadFetchMode()
-{
-    std::string path = GetSettingsPath();
-    std::ifstream file(path);
-    if (!file.is_open()) return FetchMode::CreateDBSequential;
-    try
-    {
-        json j = json::parse(file);
-        return static_cast<FetchMode>(j.value("fetch_mode", static_cast<int>(FetchMode::CreateDBSequential)));
-    }
-    catch (...) { return FetchMode::CreateDBSequential; }
-}
-
 static void OnOptionsRender()
 {
     if (ImGui::CollapsingHeader("Item Search", ImGuiTreeNodeFlags_DefaultOpen))
@@ -155,22 +127,6 @@ static void OnOptionsRender()
         }
         ImGui::PopItemWidth();
 
-        ImGui::TextUnformatted("Item data mode:");
-        FetchMode currentMode = LoadFetchMode();
-        int modeIdx = static_cast<int>(currentMode);
-        const char* modeItems = "Create Database (Sequential)\0Create Database (Parallel)\0On Demand\0";
-        ImGui::PushItemWidth(300);
-        if (ImGui::Combo("##fetch_mode_options", &modeIdx, modeItems))
-        {
-            SaveFetchMode(static_cast<FetchMode>(modeIdx));
-            ItemDb::Instance().SetFetchMode(static_cast<FetchMode>(modeIdx));
-        }
-        ImGui::PopItemWidth();
-        if (modeIdx == 2)
-        {
-            ImGui::TextColored(ImVec4(1, 0.6f, 0, 1), "Each search will take ~2 seconds (API request).");
-        }
-
         if (ImGui::Button("Save and Reload"))
         {
             s_apiKey = MainWindow::Instance().GetApiKeyBuffer();
@@ -178,19 +134,11 @@ static void OnOptionsRender()
             {
                 SaveSettingsApiKey(s_apiKey);
                 Gw2Api::Instance().SetApiKey(s_apiKey);
-                FetchMode fetchMode = LoadFetchMode();
-                ItemDb::Instance().SetFetchMode(fetchMode);
-                std::thread([fetchMode]()
+                std::thread([]()
                 {
                     try
                     {
-                        if (fetchMode != FetchMode::OnDemand)
-                        {
-                            if (fetchMode == FetchMode::CreateDBParallel)
-                                ItemDb::Instance().UpdateFromApiParallel();
-                            else
-                                ItemDb::Instance().UpdateFromApi();
-                        }
+                        ItemDb::Instance().UpdateFromApiParallel();
                         PlayerItems::Instance().Initialize(Gw2Api::Instance().GetApiKey(), s_cacheDir);
                     }
                     catch (const std::exception& e)
@@ -252,12 +200,19 @@ static void EnsureExternalLinksExist()
         file << defaultLinks.dump(2);
 }
 
+static auto s_loadStart = std::chrono::steady_clock::now();
+static std::string LoadMs()
+{
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_loadStart).count();
+    return std::to_string(ms) + "ms";
+}
+
 static void LoadCallback(AddonAPI_t* aAPI)
 {
     APIDefs = aAPI;
 
     s_addonDir = APIDefs->Paths_GetAddonDirectory("ItemSearch");
-    LogInfo(("Addon directory: " + s_addonDir).c_str());
+    LogInfo((LoadMs() + " [LOAD] Addon directory: " + s_addonDir).c_str());
 
     // Ensure addon directory exists
     CreateDirectoryA(s_addonDir.c_str(), NULL);
@@ -282,6 +237,7 @@ static void LoadCallback(AddonAPI_t* aAPI)
 
     APIDefs->QuickAccess_Add("IS_TOGGLE", "IS_ICON_DEFAULT", "IS_ICON_HOVER", "IS_TOGGLE_BIND", "Item Search");
     APIDefs->InputBinds_RegisterWithString("IS_TOGGLE_BIND", OnQuickAccessToggle, "Alt+F");
+    LogInfo((LoadMs() + " [LOAD] QuickAccess + input bind registered").c_str());
 
     EnsureExternalLinksExist();
 
@@ -292,6 +248,7 @@ static void LoadCallback(AddonAPI_t* aAPI)
     MainWindow::Instance().SetCacheDir(s_cacheDir);
     IconCache::Instance().Initialize(s_cacheDir);
     ItemDb::Instance().Initialize(s_cacheDir);
+    LogInfo((LoadMs() + " [LOAD] ItemDb initialized, " + std::to_string(ItemDb::Instance().Count()) + " cached items").c_str());
 
     std::string extLinksPath = s_addonDir + "\\external_links.json";
     ItemDb::Instance().LoadExternalLinks(extLinksPath);
@@ -299,6 +256,7 @@ static void LoadCallback(AddonAPI_t* aAPI)
     // Load saved API key
     s_apiKey = LoadSettingsApiKey();
     strncpy(MainWindow::Instance().GetApiKeyBuffer(), s_apiKey.c_str(), 255);
+    LogInfo((LoadMs() + " [LOAD] API key " + std::string(s_apiKey.empty() ? "not found" : "loaded")).c_str());
 
     MainWindow::Instance().Initialize();
 
@@ -312,19 +270,12 @@ static void LoadCallback(AddonAPI_t* aAPI)
     if (!s_apiKey.empty())
     {
         Gw2Api::Instance().SetApiKey(s_apiKey);
-        FetchMode fetchMode = LoadFetchMode();
-        ItemDb::Instance().SetFetchMode(fetchMode);
-        std::thread([fetchMode]()
+        LogInfo((LoadMs() + " [LOAD] Starting data load thread (parallel)").c_str());
+        std::thread([]()
         {
             try
             {
-                if (fetchMode != FetchMode::OnDemand)
-                {
-                    if (fetchMode == FetchMode::CreateDBParallel)
-                        ItemDb::Instance().UpdateFromApiParallel();
-                    else
-                        ItemDb::Instance().UpdateFromApi();
-                }
+                ItemDb::Instance().UpdateFromApiParallel();
                 PlayerItems::Instance().Initialize(Gw2Api::Instance().GetApiKey(), s_cacheDir);
             }
             catch (const std::exception& e)
@@ -338,7 +289,7 @@ static void LoadCallback(AddonAPI_t* aAPI)
         }).detach();
     }
 
-    LogInfo("Gw2ItemSearch loaded");
+    LogInfo((LoadMs() + " [LOAD] Gw2ItemSearch loaded").c_str());
 }
 
 static void UnloadCallback()
@@ -360,7 +311,7 @@ static AddonDefinition_t AddonDef =
     .Signature   = 0xFFFFFFFF,
     .APIVersion  = NEXUS_API_VERSION,
     .Name        = "Item Search",
-    .Version     = { 1, 0, 0, 0 },
+    .Version     = { 1, 1, 0, 0 },
     .Author      = "Todd0042",
     .Description = "Searches for items across your account",
     .Load        = LoadCallback,

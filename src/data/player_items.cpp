@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <algorithm>
+#include <chrono>
 
 PlayerItems& PlayerItems::Instance()
 {
@@ -94,6 +95,18 @@ void PlayerItems::Initialize(const std::string& apiKey, const std::string& cache
     }
 
     LogInfo(("Account: " + m_accountName).c_str());
+
+    // Fetch character list early to know total count for progress bar
+    try
+    {
+        auto charsData = Gw2Api::Instance().GetCharactersWithAges();
+        if (!charsData.is_null() && charsData.is_array())
+            m_totalCharacters = (int)charsData.size();
+    }
+    catch (...)
+    {
+        m_totalCharacters = 0;
+    }
 
     LoadCache();
     m_offlineReady = LoadFullCache();
@@ -414,10 +427,13 @@ static void ApplyItemStats(InventoryItem& item, const json& slot)
 
 void PlayerItems::ParseCharacterFromApi(const std::string& name, std::unordered_map<int, std::vector<InventoryItem>>& allItems)
 {
+    auto t0 = std::chrono::steady_clock::now();
+    auto ms = [&]() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count(); };
     auto& api = Gw2Api::Instance();
 
     // Character inventory
     auto bags = api.GetCharacterBags(name);
+    LogInfo((std::to_string(ms()) + "ms [CHAR] " + name + " bags fetched").c_str());
     if (!bags.is_null() && bags.contains("bags") && bags["bags"].is_array())
     {
         for (auto& bag : bags["bags"])
@@ -449,6 +465,7 @@ void PlayerItems::ParseCharacterFromApi(const std::string& name, std::unordered_
 
     // Equipment tabs
     auto equipTabs = api.GetCharacterEquipmentTabs(name);
+    LogInfo((std::to_string(ms()) + "ms [CHAR] " + name + " equipTabs fetched").c_str());
     if (!equipTabs.is_null() && equipTabs.is_array())
     {
         for (auto& tab : equipTabs)
@@ -475,6 +492,7 @@ void PlayerItems::ParseCharacterFromApi(const std::string& name, std::unordered_
 
     // Equipment (relic, tools)
     auto equip = api.GetCharacterEquipment(name);
+    LogInfo((std::to_string(ms()) + "ms [CHAR] " + name + " equipment fetched").c_str());
     if (!equip.is_null() && equip.contains("equipment") && equip["equipment"].is_array())
     {
         for (auto& eq : equip["equipment"])
@@ -489,6 +507,7 @@ void PlayerItems::ParseCharacterFromApi(const std::string& name, std::unordered_
             }
         }
     }
+    LogInfo((std::to_string(ms()) + "ms [CHAR] " + name + " parse complete").c_str());
 }
 
 void PlayerItems::ParseCharacterFromCache(const CachedCharacter& cached, const std::string& name, std::unordered_map<int, std::vector<InventoryItem>>& allItems)
@@ -508,6 +527,10 @@ void PlayerItems::ParseCharacterFromCache(const CachedCharacter& cached, const s
 
 void PlayerItems::RefreshFromApi()
 {
+    auto t0 = std::chrono::steady_clock::now();
+    auto ms = [&]() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count(); };
+    LogInfo("0ms [PLAYER] RefreshFromApi start");
+
     m_ready = false;
     m_progress = 0.0f;
     auto& api = Gw2Api::Instance();
@@ -515,165 +538,222 @@ void PlayerItems::RefreshFromApi()
 
     std::unordered_map<int, std::vector<InventoryItem>> allItems;
 
-    // Always refetch: bank, shared inv, materials, TP (no version check)
-    // Bank
+    // Bank (progress 0.0 → 0.10)
     m_progress = 0.05f;
-    auto bank = api.GetBank();
-    if (!bank.is_null() && bank.is_array())
     {
-        for (auto& slot : bank)
+        auto bank = api.GetBank();
+        int slots = 0;
+        if (!bank.is_null() && bank.is_array())
         {
-            if (!slot.is_null() && slot.contains("id"))
+            for (auto& slot : bank)
             {
-                InventoryItem item = MakeItem(slot["id"].get<int>(), InventoryItemSource::Bank);
-                if (slot.contains("count")) item.Count = slot["count"].get<int>();
-                if (slot.contains("upgrades") && slot["upgrades"].is_array())
-                    item.Upgrades = slot["upgrades"].get<std::vector<int>>();
-                if (slot.contains("infusions") && slot["infusions"].is_array())
-                    item.Infusions = slot["infusions"].get<std::vector<int>>();
-                ApplyItemStats(item, slot);
-                AddItem(allItems, item.Id, item);
-            }
-        }
-    }
-
-    // Shared Inventory
-    m_progress = 0.15f;
-    auto sharedInv = api.GetSharedInventory();
-    if (!sharedInv.is_null() && sharedInv.is_array())
-    {
-        for (auto& slot : sharedInv)
-        {
-            if (!slot.is_null() && slot.contains("id"))
-            {
-                InventoryItem item = MakeItem(slot["id"].get<int>(), InventoryItemSource::SharedInventory);
-                if (slot.contains("count")) item.Count = slot["count"].get<int>();
-                AddItem(allItems, item.Id, item);
-            }
-        }
-    }
-
-    // Materials
-    m_progress = 0.25f;
-    auto materials = api.GetMaterials();
-    if (!materials.is_null() && materials.is_array())
-    {
-        for (auto& mat : materials)
-        {
-            if (!mat.is_null() && mat.contains("id") && mat.contains("count"))
-            {
-                int count = mat["count"].get<int>();
-                if (count > 0)
+                if (!slot.is_null() && slot.contains("id"))
                 {
-                    InventoryItem item = MakeItem(mat["id"].get<int>(), InventoryItemSource::MaterialStorage);
-                    item.Count = count;
+                    InventoryItem item = MakeItem(slot["id"].get<int>(), InventoryItemSource::Bank);
+                    if (slot.contains("count")) item.Count = slot["count"].get<int>();
+                    if (slot.contains("upgrades") && slot["upgrades"].is_array())
+                        item.Upgrades = slot["upgrades"].get<std::vector<int>>();
+                    if (slot.contains("infusions") && slot["infusions"].is_array())
+                        item.Infusions = slot["infusions"].get<std::vector<int>>();
+                    ApplyItemStats(item, slot);
                     AddItem(allItems, item.Id, item);
+                    slots++;
                 }
             }
         }
+        LogInfo((std::to_string(ms()) + "ms [PLAYER] Bank: " + std::to_string(slots) + " slots").c_str());
     }
+    m_progress = 0.10f;
 
-    // Characters with age tracking
-    m_progress = 0.35f;
-    // Use the paged endpoint that returns names + ages in one call
-    auto characters = api.GetCharactersWithAges();
-    if (!characters.is_null() && characters.is_array())
+    // Shared Inventory (progress 0.10 → 0.15)
     {
-        float charStep = 0.45f / std::max((float)characters.size(), 1.0f);
-        int charIdx = 0;
-
-        for (auto& entry : characters)
+        auto sharedInv = api.GetSharedInventory();
+        int slots = 0;
+        if (!sharedInv.is_null() && sharedInv.is_array())
         {
-            std::string name = entry["name"].get<std::string>();
-            m_progress = 0.35f + charIdx * charStep;
-
-            int64_t currentAge = entry.value("age", (int64_t)0);
-            auto cacheIt = m_cachedAges.find(name);
-            bool needsFetch = true;
-
-            if (cacheIt != m_cachedAges.end() && cacheIt->second == currentAge)
+            for (auto& slot : sharedInv)
             {
-                needsFetch = false;
-                LogDebug(("Character " + name + " unchanged (age=" + std::to_string(currentAge) + "), using cache").c_str());
-            }
-
-            m_charAges[name] = currentAge;
-
-            if (needsFetch)
-            {
-                LogInfo(("Fetching character data for " + name).c_str());
-                ParseCharacterFromApi(name, allItems);
-            }
-            else
-            {
-                // Load cached character data from disk
-                std::string charPath = m_cacheDir + "\\chars\\" + name + ".json";
-                std::ifstream charFile(charPath);
-                if (charFile.is_open())
+                if (!slot.is_null() && slot.contains("id"))
                 {
-                    try
+                    InventoryItem item = MakeItem(slot["id"].get<int>(), InventoryItemSource::SharedInventory);
+                    if (slot.contains("count")) item.Count = slot["count"].get<int>();
+                    AddItem(allItems, item.Id, item);
+                    slots++;
+                }
+            }
+        }
+        LogInfo((std::to_string(ms()) + "ms [PLAYER] SharedInv: " + std::to_string(slots) + " slots").c_str());
+    }
+    m_progress = 0.15f;
+
+    // Materials (progress 0.15 → 0.20)
+    {
+        auto materials = api.GetMaterials();
+        int count = 0;
+        if (!materials.is_null() && materials.is_array())
+        {
+            for (auto& mat : materials)
+            {
+                if (!mat.is_null() && mat.contains("id") && mat.contains("count"))
+                {
+                    int c = mat["count"].get<int>();
+                    if (c > 0)
                     {
-                        json cachedJson = json::parse(charFile);
-                        int charVersion = cachedJson.value("version", 0);
-                        if (charVersion < CHARACTER_CACHE_VERSION)
-                        {
-                            LogDebug(("Cached data for " + name + " is stale, re-fetching").c_str());
-                            ParseCharacterFromApi(name, allItems);
-                        }
-                        else
-                        {
-                            CachedCharacter cached;
-                            cached.Age = cachedJson.value("age", (int64_t)0);
-                            cached.Items = cachedJson.value("items", std::vector<CachedCharItem>());
-                            ParseCharacterFromCache(cached, name, allItems);
-                        }
-                    }
-                    catch (...)
-                    {
-                        LogWarn(("Failed to parse cached data for " + name + ", re-fetching").c_str());
-                        ParseCharacterFromApi(name, allItems);
+                        InventoryItem item = MakeItem(mat["id"].get<int>(), InventoryItemSource::MaterialStorage);
+                        item.Count = c;
+                        AddItem(allItems, item.Id, item);
+                        count++;
                     }
                 }
-                else
+            }
+        }
+        LogInfo((std::to_string(ms()) + "ms [PLAYER] Materials: " + std::to_string(count) + " types").c_str());
+    }
+    m_progress = 0.20f;
+
+    // Characters with age tracking — parallel (progress 0.20 → 0.85)
+    int totalChars = m_totalCharacters.load();
+    {
+        auto characters = api.GetCharactersWithAges();
+        int realCharCount = characters.is_array() ? (int)characters.size() : 0;
+        if (totalChars == 0 && realCharCount > 0)
+            totalChars = realCharCount;
+        LogInfo((std::to_string(ms()) + "ms [PLAYER] Characters list: " + std::to_string(realCharCount) + " chars").c_str());
+
+        if (!characters.is_null() && characters.is_array())
+        {
+            float charProgressStart = 0.20f;
+            float charProgressRange = 0.65f;
+            float charStep = charProgressRange / std::max((float)totalChars, 1.0f);
+            std::atomic<int> nextCharIdx{ 0 };
+            std::atomic<int> completedChars{ 0 };
+            std::atomic<int> fetchedChars{ 0 };
+            std::atomic<int> cachedChars{ 0 };
+            std::mutex mergeMutex;
+            std::vector<std::unordered_map<int, std::vector<InventoryItem>>> charResults(realCharCount);
+            std::vector<std::string> charNames(realCharCount);
+            std::vector<int64_t> charAges(realCharCount);
+
+            const int numCharWorkers = 6;
+            auto charWorker = [&]()
+            {
+                while (true)
                 {
-                    ParseCharacterFromApi(name, allItems);
+                    int idx = nextCharIdx.fetch_add(1);
+                    if (idx >= realCharCount) break;
+
+                    auto& entry = characters[idx];
+                    std::string name = entry["name"].get<std::string>();
+                    int64_t currentAge = entry.value("age", (int64_t)0);
+                    charNames[idx] = name;
+                    charAges[idx] = currentAge;
+
+                    auto cacheIt = m_cachedAges.find(name);
+                    bool useCache = (cacheIt != m_cachedAges.end() && cacheIt->second == currentAge);
+
+                    auto& outItems = charResults[idx];
+
+                    if (useCache)
+                    {
+                        std::string charPath = m_cacheDir + "\\chars\\" + name + ".json";
+                        std::ifstream charFile(charPath);
+                        if (charFile.is_open())
+                        {
+                            try
+                            {
+                                json cachedJson = json::parse(charFile);
+                                int charVersion = cachedJson.value("version", 0);
+                                if (charVersion >= CHARACTER_CACHE_VERSION)
+                                {
+                                    CachedCharacter cached;
+                                    cached.Age = cachedJson.value("age", (int64_t)0);
+                                    cached.Items = cachedJson.value("items", std::vector<CachedCharItem>());
+                                    ParseCharacterFromCache(cached, name, outItems);
+                                    cachedChars++;
+                                    useCache = true;
+                                }
+                                else { useCache = false; }
+                            }
+                            catch (...) { useCache = false; }
+                        }
+                        else { useCache = false; }
+                    }
+
+                    if (!useCache)
+                    {
+                        ParseCharacterFromApi(name, outItems);
+                        fetchedChars++;
+                    }
+
+                    completedChars++;
+                    m_progress = charProgressStart + (float)completedChars * charStep;
+                }
+            };
+
+            std::vector<std::thread> charWorkers;
+            for (int w = 0; w < numCharWorkers; w++)
+                charWorkers.emplace_back(charWorker);
+            for (auto& w : charWorkers)
+                w.join();
+
+            // Merge results and update ages (single-threaded)
+            for (int i = 0; i < realCharCount; i++)
+            {
+                if (!charResults[i].empty())
+                {
+                    for (auto& [id, items] : charResults[i])
+                    {
+                        auto& existing = allItems[id];
+                        existing.insert(existing.end(), items.begin(), items.end());
+                    }
+                }
+                m_charAges[charNames[i]] = charAges[i];
+            }
+
+            LogInfo((std::to_string(ms()) + "ms [PLAYER] Characters done: " + std::to_string(fetchedChars.load()) + " fetched, " + std::to_string(cachedChars.load()) + " cached").c_str());
+        }
+    }
+
+    // Trading post delivery (progress 0.85 → 0.90)
+    m_progress = 0.87f;
+    {
+        auto tpDelivery = api.GetTradingPostDelivery();
+        int slots = 0;
+        if (!tpDelivery.is_null() && tpDelivery.contains("items") && tpDelivery["items"].is_array())
+        {
+            for (auto& tpItem : tpDelivery["items"])
+            {
+                if (!tpItem.is_null() && tpItem.contains("id"))
+                {
+                    InventoryItem item = MakeItem(tpItem["id"].get<int>(), InventoryItemSource::TradingPostDeliveryBox);
+                    if (tpItem.contains("count")) item.Count = tpItem["count"].get<int>();
+                    AddItem(allItems, item.Id, item);
+                    slots++;
                 }
             }
-
-            charIdx++;
         }
+        LogInfo((std::to_string(ms()) + "ms [PLAYER] TPDelivery: " + std::to_string(slots) + " slots").c_str());
     }
 
-    // Trading post delivery
-    m_progress = 0.85f;
-    auto tpDelivery = api.GetTradingPostDelivery();
-    if (!tpDelivery.is_null() && tpDelivery.contains("items") && tpDelivery["items"].is_array())
+    // TP sell orders (progress 0.90 → 0.93)
+    m_progress = 0.91f;
     {
-        for (auto& tpItem : tpDelivery["items"])
+        auto tpSells = api.GetTradingPostSells();
+        int slots = 0;
+        if (!tpSells.is_null() && tpSells.is_array())
         {
-            if (!tpItem.is_null() && tpItem.contains("id"))
+            for (auto& sell : tpSells)
             {
-                InventoryItem item = MakeItem(tpItem["id"].get<int>(), InventoryItemSource::TradingPostDeliveryBox);
-                if (tpItem.contains("count")) item.Count = tpItem["count"].get<int>();
-                AddItem(allItems, item.Id, item);
+                if (!sell.is_null() && sell.contains("item_id"))
+                {
+                    InventoryItem item = MakeItem(sell["item_id"].get<int>(), InventoryItemSource::TradingPostSellOrder);
+                    if (sell.contains("quantity")) item.Count = sell["quantity"].get<int>();
+                    AddItem(allItems, item.Id, item);
+                    slots++;
+                }
             }
         }
-    }
-
-    // TP sell orders
-    m_progress = 0.95f;
-    auto tpSells = api.GetTradingPostSells();
-    if (!tpSells.is_null() && tpSells.is_array())
-    {
-        for (auto& sell : tpSells)
-        {
-            if (!sell.is_null() && sell.contains("item_id"))
-            {
-                InventoryItem item = MakeItem(sell["item_id"].get<int>(), InventoryItemSource::TradingPostSellOrder);
-                if (sell.contains("quantity")) item.Count = sell["quantity"].get<int>();
-                AddItem(allItems, item.Id, item);
-            }
-        }
+        LogInfo((std::to_string(ms()) + "ms [PLAYER] TPSells: " + std::to_string(slots) + " slots").c_str());
     }
 
     int totalCount = 0;
@@ -684,35 +764,7 @@ void PlayerItems::RefreshFromApi()
             totalCount += (int)items.size();
     }
     m_totalItemCount = totalCount;
-
-    // In on-demand mode, batch-fetch item details for all inventory items
-    if (ItemDb::Instance().GetFetchMode() == FetchMode::OnDemand)
-    {
-        LogInfo("On-demand mode: batch-fetching item details for inventory items");
-        std::vector<int> allIds;
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            for (auto& [id, _] : m_items)
-                allIds.push_back(id);
-        }
-        ItemDb::Instance().BatchEnsureItems(allIds);
-
-        // Re-link ItemInfo pointers now that items are cached
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            for (auto& [id, items] : m_items)
-            {
-                auto* info = ItemDb::Instance().GetItemInfo(id);
-                for (auto& item : items)
-                {
-                    item.ItemInfo = info;
-                    if (info)
-                        item.Name = info->Name;
-                }
-            }
-        }
-        LogInfo("On-demand item details batch-fetch complete");
-    }
+    LogInfo((std::to_string(ms()) + "ms [PLAYER] All items moved to m_items: " + std::to_string(m_items.size()) + " types, " + std::to_string(totalCount) + " slots").c_str());
 
     m_progress = 1.0f;
     m_ready = true;
@@ -720,13 +772,15 @@ void PlayerItems::RefreshFromApi()
     StartBackgroundPolling();
 
     // Save full snapshot for offline mode
+    LogInfo((std::to_string(ms()) + "ms [PLAYER] Saving caches...").c_str());
     SaveFullCache();
-
-    // Save updated cache
+    LogInfo((std::to_string(ms()) + "ms [PLAYER] SaveFullCache done").c_str());
     SaveCache();
+    LogInfo((std::to_string(ms()) + "ms [PLAYER] SaveCache done").c_str());
 
-    // Save per-character cache files for unchanged characters too
+    // Save per-character cache files for changed characters
     CreateDirectoryA((m_cacheDir + "\\chars").c_str(), NULL);
+    int savedChars = 0;
     for (auto& [name, age] : m_charAges)
     {
         auto cacheIt = m_cachedAges.find(name);
@@ -770,9 +824,14 @@ void PlayerItems::RefreshFromApi()
             charFile.close();
             MoveFileExA(charTempPath.c_str(), charPath.c_str(), MOVEFILE_REPLACE_EXISTING);
         }
+        savedChars++;
     }
+    LogInfo((std::to_string(ms()) + "ms [PLAYER] Saved " + std::to_string(savedChars) + " per-character caches").c_str());
 
-    LogInfo(("Player data loaded: " + std::to_string(m_items.size()) + " unique item types, " + std::to_string(totalCount) + " total item slots").c_str());
+    // Sync cached ages so background polling doesn't re-fetch everything
+    m_cachedAges = m_charAges;
+
+    LogInfo((std::to_string(ms()) + "ms [PLAYER] RefreshFromApi complete: " + std::to_string(m_items.size()) + " types, " + std::to_string(totalCount) + " slots").c_str());
 }
 
 std::vector<InventoryItem> PlayerItems::FindMatches(const std::vector<int>& itemIds, bool excludeLegendaryArmory, bool excludeEquippedBags)

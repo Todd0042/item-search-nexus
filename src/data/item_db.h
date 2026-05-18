@@ -1,6 +1,5 @@
 #pragma once
 #include "inventory_item.h"
-#include "addon.h"
 #include <nlohmann/json.hpp>
 #include <unordered_map>
 #include <string>
@@ -17,11 +16,7 @@ public:
     static ItemDb& Instance();
 
     void Initialize(const std::string& cacheDir);
-    void UpdateFromApi();
     void UpdateFromApiParallel();
-
-    void SetFetchMode(FetchMode mode) { m_fetchMode = mode; }
-    FetchMode GetFetchMode() const { return m_fetchMode; }
 
     StaticItemInfo* GetItemInfo(int id);
     bool HasItem(int id) const;
@@ -47,6 +42,9 @@ public:
 
     const std::string& GetAssetDirectory() const { return m_assetDir; }
 
+    float DbProgress() const { return m_dbProgress; }
+    bool IsLoadingDB() const { return m_dbProgress > 0.0f && m_dbProgress < 1.0f; }
+
 private:
     ItemDb() = default;
 
@@ -63,5 +61,5 @@ private:
     std::string m_cacheDir;
     std::string m_assetDir;
     mutable std::mutex m_mutex;
-    FetchMode m_fetchMode = FetchMode::CreateDBSequential;
+    std::atomic<float> m_dbProgress{ 0.0f };
 };

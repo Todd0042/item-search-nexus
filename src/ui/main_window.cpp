@@ -182,54 +182,62 @@ void MainWindow::Render()
 
     if (!ready && !offline)
     {
-        int itemCount = ItemDb::Instance().Count();
-        FetchMode fetchMode = ItemDb::Instance().GetFetchMode();
-        float progress = playerItems.Progress();
+        auto& itemDb = ItemDb::Instance();
+        int itemCount = itemDb.Count();
+        float playerProgress = playerItems.Progress();
+        float dbProgress = itemDb.DbProgress();
+        bool isDBLoading = itemDb.IsLoadingDB();
         int totalItems = playerItems.TotalItemCount();
-
-        ImGui::TextWrapped("Loading data from Guild Wars 2 API...");
+        int totalChars = playerItems.TotalCharacters();
 
         char buf[512];
 
-        if (fetchMode == FetchMode::OnDemand)
+        // Compute overall progress: DB phase = 60%, Player phase = 40%
+        float overallProgress;
+        const char* phaseLabel;
+        if (isDBLoading)
         {
-            snprintf(buf, sizeof(buf), "No item database \xe2\x80\x94 fetching item details on demand");
+            overallProgress = dbProgress * 0.6f;
+            phaseLabel = "Downloading item database (parallel)...";
+        }
+        else if (playerProgress > 0.0f)
+        {
+            overallProgress = 0.6f + playerProgress * 0.4f;
+            if (playerProgress < 0.20f)
+                phaseLabel = "Scanning bank, materials, and shared inventory...";
+            else if (totalChars > 0 && playerProgress < 0.85f)
+            {
+                int currentChar = (int)((playerProgress - 0.20f) / (0.65f / std::max(totalChars, 1))) + 1;
+                currentChar = std::min(currentChar, totalChars);
+                snprintf(buf, sizeof(buf), "Scanning character %d of %d...", currentChar, totalChars);
+                phaseLabel = buf;
+            }
+            else
+                phaseLabel = "Checking trading post and saving...";
         }
         else
         {
-            snprintf(buf, sizeof(buf), "Items in database: %s", FormatCount(itemCount).c_str());
+            overallProgress = 0.0f;
+            phaseLabel = "Starting...";
         }
-        ImGui::TextUnformatted(buf);
 
+        ImGui::TextUnformatted(phaseLabel);
+        ImGui::ProgressBar(overallProgress, ImVec2(-1, 0));
+
+        if (itemCount > 0)
+        {
+            snprintf(buf, sizeof(buf), "Items in database: %s", FormatCount(itemCount).c_str());
+            ImGui::TextUnformatted(buf);
+        }
         if (totalItems > 0)
         {
             snprintf(buf, sizeof(buf), "Items found in your account: %s", FormatCount(totalItems).c_str());
             ImGui::TextUnformatted(buf);
         }
 
-        if (progress > 0.0f)
-        {
-            ImGui::ProgressBar(progress, ImVec2(-1, 0));
-        }
-
         if (!Gw2Api::Instance().GetApiKey().empty())
         {
-            if (fetchMode == FetchMode::OnDemand)
-            {
-                ImGui::TextWrapped("Scanning your account for items... (no database being created, item details will be fetched as needed)");
-            }
-            else if (fetchMode == FetchMode::CreateDBParallel)
-            {
-                ImGui::TextWrapped("Creating item database in parallel (~60 seconds). You may notice some in-game lag during this process.");
-                ImGui::NewLine();
-                ImGui::TextWrapped("This first scan fetches every item from every character's inventory, bank, material storage, and trading post. It can take several minutes.");
-            }
-            else
-            {
-                ImGui::TextWrapped("This first scan fetches every item from every character's inventory, bank, material storage, and trading post. It can take several minutes (up to 10 for larger accounts).");
-                ImGui::NewLine();
-                ImGui::TextWrapped("Subsequent loads are much faster \xe2\x80\x94 bank, material storage, shared inventory, and trading post are always refreshed, but individual characters are only re-scanned if they've gained playtime since the last scan. Unchanged characters load from disk cache.");
-            }
+            ImGui::TextWrapped("First scan \xe2\x80\x94 downloading item database and scanning all characters. This takes about 1 minute on subsequent loads, cached characters skip re-fetching.");
         }
         else
         {
@@ -647,10 +655,17 @@ void MainWindow::RenderResults()
     if (m_searching)
     {
         ImGui::Text("Searching...");
+        ImGui::TextDisabled("(on-demand mode fetches item names from the API, this may take a few seconds)");
         return;
     }
 
-    if (m_results.empty())
+    std::vector<InventoryItem> results;
+    {
+        std::lock_guard<std::mutex> lock(m_resultMutex);
+        results = m_results;
+    }
+
+    if (results.empty())
     {
         if (!m_searchQuery.empty() || m_options.HasActiveFilter())
         {
@@ -675,7 +690,7 @@ void MainWindow::RenderResults()
 
     // First pass: collect sources
     std::unordered_map<std::string, std::vector<InventoryItem>> groupMap;
-    for (auto& item : m_results)
+    for (auto& item : results)
     {
         std::string key;
         if (item.Source == InventoryItemSource::CharacterInventory || item.Source == InventoryItemSource::CharacterEquipment)
@@ -740,49 +755,56 @@ void MainWindow::RenderResults()
 
 void MainWindow::PerformSearch(const std::string& query)
 {
+    if (m_searching) return;
+    if (m_searchThread.joinable())
+        m_searchThread.join();
+
     m_searching = true;
-    LogDebug(("PerformSearch: '" + query + "'").c_str());
+    LogInfo(("PerformSearch (async): '" + query + "'").c_str());
 
-    auto matchedIds = ItemDb::Instance().SearchByName(query);
-    LogDebug(("PerformSearch: SearchByName returned " + std::to_string(matchedIds.size()) + " IDs").c_str());
-
-    auto matchedItems = PlayerItems::Instance().FindMatches(matchedIds, m_hideLegendaryArmory, m_hideEquippedBags);
-    LogDebug(("PerformSearch: FindMatches returned " + std::to_string(matchedItems.size()) + " items").c_str());
-
-    // Apply filters
-    if (m_options.HasActiveFilter())
+    m_searchThread = std::thread([this, query]()
     {
-        LogDebug("PerformSearch: applying filters");
-        std::vector<InventoryItem> filtered;
-        for (auto& item : matchedItems)
+        auto matchedIds = ItemDb::Instance().SearchByName(query);
+
+        auto matchedItems = PlayerItems::Instance().FindMatches(matchedIds, m_hideLegendaryArmory, m_hideEquippedBags);
+
+        std::vector<InventoryItem> finalResults;
+        if (m_options.HasActiveFilter())
         {
-            if (!m_options.FilterItem(item.ItemInfo))
-                continue;
-            if (!m_options.StatChoiceIds.empty())
+            for (auto& item : matchedItems)
             {
-                bool match = false;
-                for (int id : m_options.StatChoiceIds)
+                if (!m_options.FilterItem(item.ItemInfo))
+                    continue;
+                if (!m_options.StatChoiceIds.empty())
                 {
-                    if (item.StatChoiceId == id) { match = true; break; }
+                    bool match = false;
+                    for (int id : m_options.StatChoiceIds)
+                    {
+                        if (item.StatChoiceId == id) { match = true; break; }
+                    }
+                    if (!match) continue;
                 }
-                if (!match) continue;
+                finalResults.push_back(item);
             }
-            filtered.push_back(item);
         }
-        LogDebug(("PerformSearch: filters reduced to " + std::to_string(filtered.size()) + " items").c_str());
-        m_results = std::move(filtered);
-    }
-    else
-    {
-        m_results = std::move(matchedItems);
-    }
+        else
+        {
+            finalResults = std::move(matchedItems);
+        }
 
-    m_searching = false;
-    LogDebug(("PerformSearch: final result count = " + std::to_string(m_results.size())).c_str());
+        {
+            std::lock_guard<std::mutex> lock(m_resultMutex);
+            m_results = std::move(finalResults);
+        }
+        m_searching = false;
+        LogInfo(("PerformSearch complete: " + std::to_string(m_results.size()) + " results").c_str());
+    });
+    m_searchThread.detach();
 }
 
 void MainWindow::PerformBrowse()
 {
+    if (m_searching) return;
     if (!m_options.HasActiveFilter())
     {
         m_results.clear();
@@ -790,36 +812,44 @@ void MainWindow::PerformBrowse()
     }
 
     m_searching = true;
+    LogInfo("PerformBrowse (async)");
 
-    auto matchedIds = ItemDb::Instance().Browse(m_options);
-    auto matchedItems = PlayerItems::Instance().FindMatches(matchedIds, m_hideLegendaryArmory, m_hideEquippedBags);
-
-    if (!m_options.StatChoiceIds.empty())
+    m_searchThread = std::thread([this]()
     {
-        std::vector<InventoryItem> filtered;
-        for (auto& item : matchedItems)
+        auto matchedIds = ItemDb::Instance().Browse(m_options);
+        auto matchedItems = PlayerItems::Instance().FindMatches(matchedIds, m_hideLegendaryArmory, m_hideEquippedBags);
+
+        std::vector<InventoryItem> finalResults;
+        if (!m_options.StatChoiceIds.empty())
         {
-            bool match = false;
-            for (int id : m_options.StatChoiceIds)
+            for (auto& item : matchedItems)
             {
-                if (item.StatChoiceId == id) { match = true; break; }
+                bool match = false;
+                for (int id : m_options.StatChoiceIds)
+                {
+                    if (item.StatChoiceId == id) { match = true; break; }
+                }
+                if (match)
+                    finalResults.push_back(item);
             }
-            if (match)
-                filtered.push_back(item);
         }
-        m_results = std::move(filtered);
-    }
-    else
-    {
-        m_results = std::move(matchedItems);
-    }
+        else
+        {
+            finalResults = std::move(matchedItems);
+        }
 
-    m_searching = false;
+        {
+            std::lock_guard<std::mutex> lock(m_resultMutex);
+            m_results = std::move(finalResults);
+        }
+        m_searching = false;
+    });
+    m_searchThread.detach();
 }
 
 void MainWindow::RenderSetupWizard()
 {
-    ImGui::SetNextWindowSize(ImVec2(520, 440), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_Always);
     ImGui::SetNextWindowPos(ImVec2(
         ImGui::GetIO().DisplaySize.x * 0.5f,
         ImGui::GetIO().DisplaySize.y * 0.5f
@@ -830,7 +860,7 @@ void MainWindow::RenderSetupWizard()
 
     ImGui::TextWrapped("Welcome to Gw2ItemSearch!");
     ImGui::Separator();
-    ImGui::TextWrapped("To get started, enter your Guild Wars 2 API key and choose how item data should be loaded.");
+    ImGui::TextWrapped("Enter your Guild Wars 2 API key to get started.\nThe item database will be downloaded in the background. This takes about 1 minute on the first run.");
 
     ImGui::NewLine();
 
@@ -841,43 +871,22 @@ void MainWindow::RenderSetupWizard()
         ImGui::SetTooltip("Create a free API key at https://account.arena.net/applications");
     ImGui::NewLine();
 
-    // Fetch mode selection
-    ImGui::TextUnformatted("Item data mode:");
-    ImGui::TextDisabled("How should item names, icons, and types be loaded?");
+    ImGui::Separator();
+    ImGui::NewLine();
 
-    const char* modeNames[] = {
-        "Create Database (Sequential) \xe2\x80\x94 ~6 minutes, no lag",
-        "Create Database (Parallel) \xe2\x80\x94 ~1 minute, some in-game lag",
-        "On Demand \xe2\x80\x94 No initial wait, each search takes ~2 seconds"
-    };
-    const char* modeDescriptions[] = {
-        "Downloads ALL 70,000+ items from the GW2 API one batch at a time. "
-        "After the first load, subsequent loads are instant from disk cache.",
-        "Downloads the full database using 6 concurrent connections. "
-        "Much faster but may cause stutter while the game is running.",
-        "No full download. Item names are fetched from the API each time you search. "
-        "Your inventory items are cached locally. Best if you don't want a long first load."
-    };
-    const char* modeWarnings[] = {
-        "",
-        "",
-        "Warning: With on-demand mode, every search makes an API request (~1-2 seconds) "
-        "and the stat/dropdown-based 'Browse' feature is unavailable."
-    };
+    ImGui::TextUnformatted("Credits");
+    ImGui::Separator();
+    ImGui::TextWrapped("This addon is based on Gw2ItemSearch by tentose.");
 
-    for (int i = 0; i < 3; i++)
-    {
-        if (ImGui::RadioButton(modeNames[i], &m_wizardFetchMode, i))
-        {
-        }
-        ImGui::TextDisabled("  %s", modeDescriptions[i]);
-        if (i == 2 && m_wizardFetchMode == 2)
-        {
-            ImGui::TextColored(ImVec4(1, 0.6f, 0, 1), "  %s", modeWarnings[i]);
-        }
-        ImGui::NewLine();
-    }
+    if (ImGui::SmallButton("github.com/tentose/Gw2ItemSearch"))
+        ShellExecuteA(nullptr, "open", "https://github.com/tentose/Gw2ItemSearch", nullptr, nullptr, SW_SHOWNORMAL);
 
+    ImGui::NewLine();
+    ImGui::TextWrapped("Gw2ItemSearch was originally created for Blish HUD, a standalone overlay for Guild Wars 2.");
+    if (ImGui::SmallButton("github.com/blish-hud/Blish-HUD"))
+        ShellExecuteA(nullptr, "open", "https://github.com/blish-hud/Blish-HUD", nullptr, nullptr, SW_SHOWNORMAL);
+
+    ImGui::NewLine();
     ImGui::Separator();
 
     bool hasKey = strlen(m_apiKeyBuffer) > 0;
@@ -890,26 +899,16 @@ void MainWindow::RenderSetupWizard()
     }
     else if (ImGui::Button("Save and Start", ImVec2(200, 0)))
     {
-        FetchMode mode = static_cast<FetchMode>(m_wizardFetchMode);
-        SaveFetchMode(mode);
         SaveSettingsApiKey(m_apiKeyBuffer);
         Gw2Api::Instance().SetApiKey(m_apiKeyBuffer);
-
-        ItemDb::Instance().SetFetchMode(mode);
         LogInfo("Starting data load from setup wizard");
 
         std::string cacheDir = m_cacheDir;
-        std::thread([mode, cacheDir]()
+        std::thread([cacheDir]()
         {
             try
             {
-                if (mode != FetchMode::OnDemand)
-                {
-                    if (mode == FetchMode::CreateDBParallel)
-                        ItemDb::Instance().UpdateFromApiParallel();
-                    else
-                        ItemDb::Instance().UpdateFromApi();
-                }
+                ItemDb::Instance().UpdateFromApiParallel();
                 PlayerItems::Instance().Initialize(Gw2Api::Instance().GetApiKey(), cacheDir);
             }
             catch (const std::exception& e)
@@ -962,34 +961,6 @@ void MainWindow::RenderSettingsWindow()
                 }
 
                 ImGui::Separator();
-
-                // Fetch mode selector
-                FetchMode currentMode = ItemDb::Instance().GetFetchMode();
-                int modeIdx = static_cast<int>(currentMode);
-                const char* modeItems = "Create Database (Sequential)\0Create Database (Parallel)\0On Demand\0";
-                ImGui::TextUnformatted("Item data mode:");
-                if (ImGui::Combo("##fetch_mode", &modeIdx, modeItems))
-                {
-                    FetchMode newMode = static_cast<FetchMode>(modeIdx);
-                    SaveFetchMode(newMode);
-                    ItemDb::Instance().SetFetchMode(newMode);
-                }
-                if (ImGui::IsItemHovered())
-                {
-                    if (modeIdx == 0)
-                        ImGui::SetTooltip("Downloads all 70k+ items sequentially. ~6 min first load, no lag, instant searches.");
-                    else if (modeIdx == 1)
-                        ImGui::SetTooltip("Downloads all 70k+ items using 6 parallel connections. ~1 min first load, minor lag.");
-                    else
-                        ImGui::SetTooltip("No database. Item names fetched via API on each search (~2 sec). Choose this to skip the long first load.");
-                }
-
-                if (modeIdx == 2)
-                {
-                    ImGui::TextColored(ImVec4(1, 0.6f, 0, 1), "Each search will take approximately 2 seconds (API request).");
-                }
-
-                ImGui::Separator();
                 ImGui::Text("API Key");
                 ImGui::InputText("##api_key_settings", m_apiKeyBuffer, sizeof(m_apiKeyBuffer));
                 if (ImGui::Button("Save and Reload"))
@@ -997,19 +968,12 @@ void MainWindow::RenderSettingsWindow()
                     std::string key(m_apiKeyBuffer);
                     SaveSettingsApiKey(key);
                     Gw2Api::Instance().SetApiKey(key);
-                    FetchMode fetchMode = ItemDb::Instance().GetFetchMode();
                     std::string cacheDir = m_cacheDir;
-                    std::thread([fetchMode, cacheDir]()
+                    std::thread([cacheDir]()
                     {
                         try
                         {
-                            if (fetchMode != FetchMode::OnDemand)
-                            {
-                                if (fetchMode == FetchMode::CreateDBParallel)
-                                    ItemDb::Instance().UpdateFromApiParallel();
-                                else
-                                    ItemDb::Instance().UpdateFromApi();
-                            }
+                            ItemDb::Instance().UpdateFromApiParallel();
                             PlayerItems::Instance().Initialize(Gw2Api::Instance().GetApiKey(), cacheDir);
                         }
                         catch (const std::exception& e)

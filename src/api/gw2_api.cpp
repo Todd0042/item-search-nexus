@@ -147,5 +147,18 @@ json Gw2Api::GetLegendaryArmory()
 
 json Gw2Api::SearchItems(const std::string& text)
 {
-    return GetJson("/v2/search?ids=all&text=" + text);
+    // Simple URL encoding for the search text
+    std::string encoded;
+    for (char c : text)
+    {
+        if (isalnum(c) || c == '-' || c == '_' || c == '.')
+            encoded += c;
+        else
+        {
+            char buf[4];
+            snprintf(buf, sizeof(buf), "%%%02X", (unsigned char)c);
+            encoded += buf;
+        }
+    }
+    return GetJson("/v2/search?text=" + encoded);
 }

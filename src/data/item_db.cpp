@@ -8,6 +8,7 @@
 #include <cctype>
 #include <thread>
 #include <atomic>
+#include <chrono>
 #include <unordered_set>
 #include <winhttp.h>
 
@@ -210,81 +211,21 @@ void ItemDb::SaveStatChoicesToDisk()
         file << arr.dump(2);
 }
 
-void ItemDb::UpdateFromApi()
-{
-    LogInfo("Updating item database from API");
-
-    FetchStatChoices();
-
-    auto& api = Gw2Api::Instance();
-    auto allIds = api.GetAllItemIds();
-
-    if (allIds.empty())
-    {
-        LogWarn("Failed to get item IDs from API");
-        return;
-    }
-
-    int newItems = 0;
-    std::vector<int> idsToFetch;
-
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        for (int id : allIds)
-        {
-            if (m_items.find(id) == m_items.end())
-                idsToFetch.push_back(id);
-        }
-    }
-
-    LogInfo(("Need to fetch " + std::to_string(idsToFetch.size()) + " new items").c_str());
-
-    const int batchSize = 200;
-    size_t totalBatches = (idsToFetch.size() + batchSize - 1) / batchSize;
-    for (size_t i = 0; i < idsToFetch.size(); i += batchSize)
-    {
-        size_t end = std::min(i + batchSize, idsToFetch.size());
-        std::vector<int> batch(idsToFetch.begin() + i, idsToFetch.begin() + end);
-
-        json items = api.GetItems(batch);
-        if (items.is_null() || !items.is_array())
-        {
-            LogWarn("Failed to fetch item batch");
-            Sleep(50);
-            continue;
-        }
-
-        for (auto& item : items)
-        {
-            int id = item["id"].get<int>();
-            StaticItemInfo info = ParseItemJson(item);
-
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_items[id] = info;
-            newItems++;
-        }
-
-        size_t batchNum = i / batchSize + 1;
-        if (batchNum % 50 == 0 || batchNum == totalBatches)
-        {
-            LogInfo(("Item DB progress: " + std::to_string(batchNum) + "/" + std::to_string(totalBatches) + " batches (" + std::to_string(newItems) + " items)").c_str());
-        }
-
-        Sleep(50);
-    }
-
-    LogInfo(("Added " + std::to_string(newItems) + " new items to database").c_str());
-    SaveToDisk();
-}
-
 void ItemDb::UpdateFromApiParallel()
 {
-    LogInfo("Updating item database from API (parallel)");
+    m_dbProgress = 0.0f;
+    auto t0 = std::chrono::steady_clock::now();
+    auto ms = [&]() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count(); };
+    LogInfo("0ms [DB] UpdateFromApiParallel start");
 
     FetchStatChoices();
+    m_dbProgress = 0.01f;
+    LogInfo((std::to_string(ms()) + "ms [DB] FetchStatChoices done").c_str());
 
     auto& api = Gw2Api::Instance();
     auto allIds = api.GetAllItemIds();
+    m_dbProgress = 0.02f;
+    LogInfo((std::to_string(ms()) + "ms [DB] GetAllItemIds done, " + std::to_string(allIds.size()) + " IDs").c_str());
 
     if (allIds.empty())
     {
@@ -302,13 +243,15 @@ void ItemDb::UpdateFromApiParallel()
         }
     }
 
-    LogInfo(("Need to fetch " + std::to_string(idsToFetch.size()) + " new items (parallel)").c_str());
+    LogInfo((std::to_string(ms()) + "ms [DB] " + std::to_string(idsToFetch.size()) + " new items to fetch (" + std::to_string(m_items.size()) + " cached)").c_str());
 
     const int batchSize = 200;
     size_t totalBatches = (idsToFetch.size() + batchSize - 1) / batchSize;
-    const int numWorkers = 6;
+    const int numWorkers = 12;
     std::atomic<int> nextBatch{ 0 };
     std::atomic<int> totalFetched{ 0 };
+
+    LogInfo((std::to_string(ms()) + "ms [DB] Starting " + std::to_string(numWorkers) + " parallel workers for " + std::to_string(totalBatches) + " batches").c_str());
 
     auto workerFn = [&]()
     {
@@ -325,27 +268,21 @@ void ItemDb::UpdateFromApiParallel()
             size_t end = std::min(start + batchSize, idsToFetch.size());
             std::vector<int> batch(idsToFetch.begin() + start, idsToFetch.begin() + end);
 
-            // Build URL
+            // Direct WinHTTP call: build full URL
             std::string idsStr;
             for (size_t i = 0; i < batch.size(); i++)
             {
                 if (i > 0) idsStr += ",";
                 idsStr += std::to_string(batch[i]);
             }
-            std::string url = "/v2/items?ids=" + idsStr;
+            std::string url = "https://api.guildwars2.com/v2/items?ids=" + idsStr;
 
-            // Direct WinHTTP call (no HttpClient singleton)
             std::wstring wurl(128 + url.size(), L'\0');
             int wlen = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, &wurl[0], (int)wurl.size());
             wurl.resize(wlen - 1);
 
             URL_COMPONENTS urlComp = { 0 };
             urlComp.dwStructSize = sizeof(urlComp);
-            urlComp.lpszHostName = (LPWSTR)L"api.guildwars2.com";
-            urlComp.dwHostNameLength = (DWORD)wcslen(L"api.guildwars2.com");
-            urlComp.lpszUrlPath = &wurl[0];
-            urlComp.dwUrlPathLength = (DWORD)wurl.size();
-
             wchar_t hostBuf[128];
             wchar_t pathBuf[4096];
             urlComp.lpszHostName = hostBuf;
@@ -414,11 +351,31 @@ void ItemDb::UpdateFromApiParallel()
     for (int w = 0; w < numWorkers; w++)
         workers.emplace_back(workerFn);
 
+    // Monitor progress while workers run
+    std::atomic<bool> monitoringDone{ false };
+    std::thread monitor([&]()
+    {
+        size_t totalToFetch = idsToFetch.size();
+        while (!monitoringDone)
+        {
+            int fetched = totalFetched.load();
+            m_dbProgress = 0.02f + 0.97f * ((float)std::min(fetched, (int)totalToFetch) / (float)totalToFetch);
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+    });
+
     for (auto& w : workers)
         w.join();
 
-    LogInfo(("Parallel fetch complete: " + std::to_string(totalFetched.load()) + " new items").c_str());
+    monitoringDone = true;
+    if (monitor.joinable())
+        monitor.join();
+    m_dbProgress = 0.99f;
+
+    LogInfo((std::to_string(ms()) + "ms [DB] Parallel fetch complete: " + std::to_string(totalFetched.load()) + " new items").c_str());
     SaveToDisk();
+    m_dbProgress = 1.0f;
+    LogInfo((std::to_string(ms()) + "ms [DB] UpdateFromApiParallel complete").c_str());
 }
 
 StaticItemInfo* ItemDb::GetItemInfo(int id)
@@ -446,6 +403,8 @@ void ItemDb::BatchEnsureItems(const std::vector<int>& ids)
 {
     if (ids.empty()) return;
 
+    auto t0 = std::chrono::steady_clock::now();
+
     std::vector<int> toFetch;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -458,9 +417,10 @@ void ItemDb::BatchEnsureItems(const std::vector<int>& ids)
 
     if (toFetch.empty()) return;
 
-    LogInfo(("BatchEnsureItems: fetching " + std::to_string(toFetch.size()) + " uncached items").c_str());
+    LogInfo((std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()) + "ms [DB] BatchEnsureItems: " + std::to_string(toFetch.size()) + " uncached of " + std::to_string(ids.size()) + " requested").c_str());
 
     const int batchSize = 200;
+    int fetched = 0;
     for (size_t i = 0; i < toFetch.size(); i += batchSize)
     {
         size_t end = std::min(i + batchSize, toFetch.size());
@@ -474,38 +434,15 @@ void ItemDb::BatchEnsureItems(const std::vector<int>& ids)
             StaticItemInfo info = ParseItemJson(item);
             std::lock_guard<std::mutex> lock(m_mutex);
             m_items[id] = info;
+            fetched++;
         }
     }
 
-    LogInfo("BatchEnsureItems complete");
+    LogInfo((std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()) + "ms [DB] BatchEnsureItems complete: fetched " + std::to_string(fetched)).c_str());
 }
 
 std::vector<int> ItemDb::SearchByName(const std::string& query)
 {
-    // On-demand mode: search via API regardless of cached items
-    if (m_fetchMode == FetchMode::OnDemand)
-    {
-        LogInfo(("SearchByName (on-demand): '" + query + "'").c_str());
-
-        json searchResult = Gw2Api::Instance().SearchItems(query);
-        if (searchResult.is_null() || !searchResult.is_array())
-        {
-            LogWarn("SearchByName on-demand failed");
-            return {};
-        }
-
-        std::vector<int> ids = searchResult.get<std::vector<int>>();
-        LogInfo(("SearchByName on-demand found " + std::to_string(ids.size()) + " matching IDs").c_str());
-
-        if (!ids.empty())
-        {
-            BatchEnsureItems(ids);
-        }
-
-        return ids;
-    }
-
-    // Normal mode: search local database
     std::string lowerQuery = query;
     std::transform(lowerQuery.begin(), lowerQuery.end(), lowerQuery.begin(), ::tolower);
 
@@ -550,6 +487,7 @@ std::vector<int> ItemDb::Browse(const SearchOptions& options) const
 
 void ItemDb::FetchStatChoices()
 {
+    auto t0 = std::chrono::steady_clock::now();
     auto& api = Gw2Api::Instance();
     json choices = api.GetJsonPublic("/v2/itemstats?ids=all");
     if (choices.is_null() || !choices.is_array())
@@ -557,6 +495,8 @@ void ItemDb::FetchStatChoices()
         LogWarn("Failed to fetch stat choices from API");
         return;
     }
+
+    LogInfo((std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()) + "ms [DB] Stat choices API returned " + std::to_string(choices.size()) + " entries").c_str());
 
     {
         std::lock_guard<std::mutex> lock(m_mutex);

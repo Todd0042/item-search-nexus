@@ -45,6 +45,7 @@ public:
     bool IsOfflineReady() const { return m_offlineReady; }
     float Progress() const { return m_progress; }
     int TotalItemCount() const { return m_totalItemCount; }
+    int TotalCharacters() const { return m_totalCharacters; }
 
     void Stop();
 
@@ -83,6 +84,7 @@ private:
     std::atomic<bool> m_offlineReady{ false };
     std::atomic<float> m_progress{ 0.0f };
     std::atomic<int> m_totalItemCount{ 0 };
+    std::atomic<int> m_totalCharacters{ 0 };
 
     std::thread m_backgroundThread;
     std::atomic<bool> m_backgroundRunning{ false };

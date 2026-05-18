@@ -5,6 +5,7 @@
 #include <string>
 #include <atomic>
 #include <mutex>
+#include <thread>
 
 class MainWindow
 {
@@ -72,7 +73,9 @@ private:
 
     // Setup wizard
     bool m_showSetupWizard = false;
-    int m_wizardFetchMode = 0;
+
+    // Search thread
+    std::thread m_searchThread;
 
     // External links context menu
     int m_contextMenuItemId = 0;
